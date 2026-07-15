@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createApi, getApiConfig, type ApiRun, type TestPilotApi } from './api.js';
 import './style.css';
 
 type Status = 'passed' | 'failed' | 'running';
 interface Run { id: string; test: string; branch: string; duration: string; status: Status; time: string; }
 
-const runs: Run[] = [
+const demoRuns: Run[] = [
   { id: 'run-9f31', test: 'Checkout / guest payment', branch: 'main', duration: '01:42', status: 'passed', time: '2 min ago' },
   { id: 'run-9f2c', test: 'Account / sign in', branch: 'feat/auth-refresh', duration: '00:38', status: 'failed', time: '18 min ago' },
   { id: 'run-9f1a', test: 'Catalog / search filters', branch: 'main', duration: '00:54', status: 'passed', time: '42 min ago' },
@@ -19,12 +20,27 @@ function Icon({ name }: { name: string }) { return <span className={`icon icon-$
 function StatusPill({ status }: { status: Status }) { return <span className={`pill pill-${status}`}><span className="dot" />{status}</span>; }
 
 function App() {
+  const api = useMemo<TestPilotApi | undefined>(() => { const config = getApiConfig(); return config === undefined ? undefined : createApi(config); }, []);
   const [active, setActive] = useState('Overview');
-  const [selectedRun, setSelectedRun] = useState(runs[1]);
+  const [runs, setRuns] = useState<Run[]>(demoRuns);
+  const [selectedRun, setSelectedRun] = useState<Run | undefined>(demoRuns[1] ?? demoRuns[0]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [running, setRunning] = useState(false);
+  const [connection, setConnection] = useState<'demo' | 'live' | 'error'>(api === undefined ? 'demo' : 'live');
   const nav: Array<[string, string]> = [['Overview', 'grid'], ['Tests', 'layers'], ['Runs', 'activity'], ['Runners', 'server'], ['Schedules', 'clock']];
-  const startRun = () => { setRunning(true); setTimeout(() => setRunning(false), 1800); };
+  useEffect(() => {
+    if (api === undefined) return;
+    void api.listRuns().then((items) => { setRuns(items.map(runForUi)); setConnection('live'); }).catch(() => setConnection('error'));
+  }, [api]);
+  const startRun = () => {
+    setRunning(true);
+    const config = getApiConfig();
+    if (api !== undefined && config?.projectId !== undefined && config.testId !== undefined) {
+      void api.startRun(config.projectId, config.testId).then((result) => { const run = runForUi({ id: result.runId, projectId: config.projectId ?? '', testId: config.testId ?? '', status: result.status, createdAt: new Date().toISOString() }); setRuns((current) => [run, ...current]); setSelectedRun(run); }).catch(() => setConnection('error')).finally(() => setRunning(false));
+      return;
+    }
+    setTimeout(() => setRunning(false), 1800);
+  };
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">O</div><div><strong>OpenTestPilot</strong><small>QA control plane</small></div></div>
@@ -37,7 +53,7 @@ function App() {
       <div className="profile"><div className="profile-avatar">YK</div><div><b>Yu-ga Kato</b><small>Owner</small></div><Icon name="more" /></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><div><div className="eyebrow">SHOPFRONT / {active.toUpperCase()}</div><h1>{active}</h1></div><div className="top-actions"><button className="icon-button" aria-label="Search"><Icon name="search" /></button><button className="icon-button" aria-label="Notifications"><Icon name="bell" /><span className="notification-badge" /></button><button className="run-button" onClick={startRun} disabled={running}><Icon name="play" />{running ? 'Starting…' : 'Run test'}<span className="shortcut">⌘ ↵</span></button></div></header>
+      <header className="topbar"><div><div className="eyebrow">SHOPFRONT / {active.toUpperCase()}</div><h1>{active}</h1><span className={`connection-state ${connection}`}><span />{connection === 'live' ? 'Connected to team server' : connection === 'error' ? 'API connection failed' : 'Demo data'}</span></div><div className="top-actions"><button className="icon-button" aria-label="Search"><Icon name="search" /></button><button className="icon-button" aria-label="Notifications"><Icon name="bell" /><span className="notification-badge" /></button><button className="run-button" onClick={startRun} disabled={running}><Icon name="play" />{running ? 'Starting…' : 'Run test'}<span className="shortcut">⌘ ↵</span></button></div></header>
       {active === 'Overview' ? <>
         <section className="metric-grid"><Metric label="Pass rate" value="94.8%" change="+2.4%" tone="green" icon="check" /><Metric label="Runs this week" value="128" change="+18" tone="blue" icon="activity" /><Metric label="Median duration" value="01:08" change="−12s" tone="purple" icon="clock" /><Metric label="Flaky tests" value="4" change="−2" tone="orange" icon="spark" /></section>
         <section className="content-grid"><div className="panel runs-panel"><div className="panel-header"><div><h2>Recent runs</h2><p>Latest executions across your test suite</p></div><button className="text-button" onClick={() => setActive('Runs')}>View all <span>→</span></button></div><div className="run-table"><div className="table-head"><span>TEST</span><span>BRANCH</span><span>DURATION</span><span>STATUS</span><span>WHEN</span></div>{runs.map((run) => <button className={`run-row ${selectedRun?.id === run.id ? 'selected' : ''}`} key={run.id} onClick={() => setSelectedRun(run)}><span className="test-name"><span className={`run-icon ${run.status}`}><Icon name={run.status === 'passed' ? 'check' : run.status === 'failed' ? 'close' : 'play'} /></span><b>{run.test}</b></span><span className="branch"><Icon name="branch" />{run.branch}</span><span className="muted">{run.duration}</span><StatusPill status={run.status} /><span className="muted">{run.time}</span></button>)}</div></div><div className="panel activity-panel"><div className="panel-header"><div><h2>Activity</h2><p>Signals from your workspace</p></div><button className="more-button" aria-label="More activity">•••</button></div><Activity icon="spark" title="Test generated" body="Account / sign in" time="8m ago" /><Activity icon="branch" title="PR #184 opened" body="Improve checkout coverage" time="23m ago" /><Activity icon="shield" title="Runner updated" body="linux-chromium-02" time="1h ago" /></div></section>
@@ -50,5 +66,9 @@ function App() {
 
 function Metric({ label, value, change, tone, icon }: { label: string; value: string; change: string; tone: string; icon: string }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} /></div><div className="metric-copy"><span>{label}</span><strong>{value}</strong><small className={tone === 'orange' ? 'negative' : ''}>{change} <em>vs last week</em></small></div><div className="sparkline"><i /><i /><i /><i /><i /><i /><i /></div></div>; }
 function Activity({ icon, title, body, time }: { icon: string; title: string; body: string; time: string }) { return <div className="activity-item"><div className="activity-icon"><Icon name={icon} /></div><div><b>{title}</b><span>{body}</span></div><time>{time}</time></div>; }
+
+function runForUi(run: ApiRun): Run { return { id: run.id, test: run.testId, branch: 'server', duration: run.startedAt === undefined || run.endedAt === undefined ? '—' : formatDuration(Date.parse(run.endedAt) - Date.parse(run.startedAt)), status: run.status === 'queued' ? 'running' : run.status, time: relativeTime(run.createdAt) }; }
+function formatDuration(milliseconds: number): string { if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—'; const seconds = Math.round(milliseconds / 1000); return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`; }
+function relativeTime(value: string): string { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000)); return seconds < 60 ? 'Now' : `${Math.floor(seconds / 60)}m ago`; }
 
 createRoot(document.getElementById('root')!).render(<App />);

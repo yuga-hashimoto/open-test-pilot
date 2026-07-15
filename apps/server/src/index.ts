@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import cors from '@fastify/cors';
 import { buildGitHubAuthorizationUrl, exchangeGitHubOAuthCode } from '@open-test-pilot/github-adapter';
-import { Scheduler, type RunnerCapabilities } from '@open-test-pilot/scheduler';
+import { type RunnerCapabilities } from '@open-test-pilot/scheduler';
 import type { Job } from '@open-test-pilot/runner-protocol';
 import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
 import { verifyWebhookSignature } from '@open-test-pilot/github-adapter';
+import { MemoryExecutionQueue, RedisExecutionQueue, type ExecutionQueue } from '@open-test-pilot/queue-adapter';
 import { PostgresTenantRepository } from './postgres.js';
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -54,6 +56,7 @@ export interface TenantRepository {
   getTest(organizationId: string, id: string): MaybePromise<TestRecord | undefined>;
   createRun(organizationId: string, projectId: string, testId: string): MaybePromise<RunRecord>;
   getRun(id: string): MaybePromise<RunRecord | undefined>;
+  listRuns(organizationId: string): MaybePromise<RunRecord[]>;
   updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>): MaybePromise<RunRecord | undefined>;
 }
 
@@ -105,6 +108,8 @@ export class InMemoryTenantRepository implements TenantRepository {
 
   getRun(id: string): RunRecord | undefined { return this.runs.get(id); }
 
+  listRuns(organizationId: string): RunRecord[] { return [...this.runs.values()].filter((run) => run.organizationId === organizationId); }
+
   updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>): RunRecord | undefined {
     const current = this.runs.get(id);
     if (current === undefined) return undefined;
@@ -152,13 +157,13 @@ export function createConfiguredRepository(): TenantRepository {
   return process.env['DATABASE_URL'] === undefined ? new InMemoryTenantRepository() : new PostgresTenantRepository(process.env['DATABASE_URL']);
 }
 
-export function buildServer(repository: TenantRepository = createConfiguredRepository()): FastifyInstance {
+export function createConfiguredExecutionQueue(): ExecutionQueue { return process.env['REDIS_URL'] === undefined ? new MemoryExecutionQueue() : new RedisExecutionQueue(process.env['REDIS_URL']); }
+
+export function buildServer(repository: TenantRepository = createConfiguredRepository(), executionQueue: ExecutionQueue = createConfiguredExecutionQueue()): FastifyInstance {
   const app = Fastify({ logger: false });
   const oauthStates = new Set<string>();
-  const scheduler = new Scheduler();
-  const runnerOrganizations = new Map<string, string>();
-  const runners = new Map<string, RunnerCapabilities>();
   const schedules = new Map<string, ScheduleRecord>();
+  void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
     const clientId = process.env['GITHUB_CLIENT_ID'];
@@ -233,6 +238,11 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send(run);
   });
 
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/runs', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ runs: await repository.listRuns(request.params.organizationId) });
+  });
+
   app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/report', async (request, reply) => {
     const run = await repository.getRun(request.params.runId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
@@ -248,15 +258,14 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (await repository.getOrganization(request.params.organizationId) === undefined) return reply.code(404).send({ error: 'organization not found' });
     const runnerId = `runner-${randomUUID()}`;
     const capabilities = { ...body.capabilities, runnerId };
-    runnerOrganizations.set(runnerId, request.params.organizationId);
-    runners.set(runnerId, capabilities);
-    return reply.code(201).send({ runnerId, name: body.name.trim(), capabilities });
+    const runner = await executionQueue.registerRunner(request.params.organizationId, body.name.trim(), capabilities);
+    return reply.code(201).send(runner);
   });
 
   app.post<{ Params: RunnerParams; Headers: TenantHeaders }>('/v1/runners/:runnerId/heartbeat', async (request, reply) => {
-    const organizationId = runnerOrganizations.get(request.params.runnerId);
-    if (organizationId === undefined) return reply.code(404).send({ error: 'runner not found' });
-    if (!requireTenant(request, reply, organizationId)) return reply;
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    if (!await executionQueue.heartbeat(organizationId, request.params.runnerId)) return reply.code(404).send({ error: 'runner not found' });
     return reply.send({ runnerId: request.params.runnerId, heartbeatAt: new Date().toISOString() });
   });
 
@@ -264,26 +273,24 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     const job = request.body?.job;
     if (job === undefined || typeof job.jobId !== 'string' || typeof job.runId !== 'string' || job.organizationId !== request.params.organizationId) return reply.code(400).send({ error: 'tenant-scoped job is required' });
-    if (!scheduler.enqueue(job)) return reply.code(409).send({ error: 'job already queued or leased' });
+    if (!await executionQueue.enqueue(request.params.organizationId, job)) return reply.code(409).send({ error: 'job already queued or leased' });
     return reply.code(202).send({ jobId: job.jobId, status: 'queued' });
   });
 
   app.post<{ Params: RunnerParams; Headers: TenantHeaders }>('/v1/runners/:runnerId/lease', async (request, reply) => {
-    const organizationId = runnerOrganizations.get(request.params.runnerId);
-    const capabilities = runners.get(request.params.runnerId);
-    if (organizationId === undefined || capabilities === undefined) return reply.code(404).send({ error: 'runner not found' });
-    if (!requireTenant(request, reply, organizationId)) return reply;
-    const job = scheduler.leaseNext(capabilities);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const job = await executionQueue.lease(organizationId, request.params.runnerId);
     return reply.send({ job: job ?? null });
   });
 
   app.post<{ Params: JobParams; Headers: TenantHeaders; Body: CompleteJobBody }>('/v1/jobs/:jobId/complete', async (request, reply) => {
-    const leasedJob = scheduler.getLeasedJob(request.params.jobId);
+    const leasedJob = await executionQueue.getJob(request.params.jobId);
     if (leasedJob === undefined) return reply.code(404).send({ error: 'leased job not found' });
     if (leasedJob.organizationId !== tenantId(request)) return reply.code(403).send({ error: 'organization access denied' });
     const status = request.body?.status;
     if (status !== 'passed' && status !== 'failed' && status !== 'cancelled') return reply.code(400).send({ error: 'status must be passed, failed, or cancelled' });
-    const result = scheduler.complete(request.params.jobId, status);
+    const result = await executionQueue.complete(tenantId(request) ?? '', request.params.jobId, status);
     if (result === undefined) return reply.code(404).send({ error: 'leased job not found' });
     return reply.send({ jobId: result.jobId, status: result.status });
   });
@@ -318,7 +325,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}': { get: {} },
     '/v1/organizations/{organizationId}/projects': { post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
-    '/v1/organizations/{organizationId}/runs': { post: {} },
+    '/v1/organizations/{organizationId}/runs': { get: {}, post: {} },
     '/v1/runs/{runId}': { get: {} },
     '/v1/runs/{runId}/report': { get: {} },
     '/v1/organizations/{organizationId}/runners': { post: {} },

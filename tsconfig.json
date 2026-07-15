@@ -41,6 +41,7 @@
     { "path": "packages/appium-adapter" },
     { "path": "packages/notification-adapter" },
     { "path": "packages/trigger-adapter" },
+    { "path": "packages/queue-adapter" },
     { "path": "apps/ai-worker" },
     { "path": "apps/server" },
     { "path": "apps/runner" }

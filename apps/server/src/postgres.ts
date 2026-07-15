@@ -92,6 +92,13 @@ export class PostgresTenantRepository implements TenantRepository {
     return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
   }
 
+  async listRuns(organizationId: string): Promise<RunRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('SELECT id, organization_id, project_id, test_id, status, created_at, started_at, ended_at FROM runs WHERE organization_id = $1 ORDER BY created_at DESC', [organizationId]);
+      return result.rows.map(runFromRow);
+    });
+  }
+
   async updateRun(id: string, patch: RunPatch): Promise<RunRecord | undefined> {
     const existing = await this.getRun(id);
     if (existing === undefined) return undefined;
