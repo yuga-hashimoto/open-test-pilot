@@ -16,6 +16,7 @@ export type ExecutionMode = 'local' | 'docker' | 'trusted-host';
 
 export interface Capabilities {
   browsers: string[];
+  labels?: string[];
   operatingSystem?: string;
   maxConcurrency: number;
   devices?: string[];
@@ -53,4 +54,6 @@ export interface Job {
   retryPolicy?: RetryPolicy;
   executionMode?: ExecutionMode;
   artifactPolicy?: ArtifactPolicy;
+  priority?: number;
+  requiredLabels?: string[];
 }

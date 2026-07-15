@@ -59,6 +59,8 @@ importers:
         specifier: workspace:*
         version: link:../manifest-schema
 
+  packages/github-adapter: {}
+
   packages/local-runner:
     dependencies:
       '@open-test-pilot/generator':
@@ -117,6 +119,12 @@ importers:
       '@open-test-pilot/result-schema':
         specifier: workspace:*
         version: link:../result-schema
+
+  packages/scheduler:
+    dependencies:
+      '@open-test-pilot/runner-protocol':
+        specifier: workspace:*
+        version: link:../runner-protocol
 
 packages:
 
