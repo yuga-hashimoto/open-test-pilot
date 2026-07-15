@@ -24,8 +24,8 @@ Completed in the foundation slice:
 - `R-001`, `R-002`, `R-003`, `R-004`: Playwright Chromium adapter, local Runner, step evidence, static HTML report, CLI validate/generate/run/report commands.
 - `A-001`: Claude Code Plugin initial manifest, Skills, Subagents, hooks, commands, and validation script.
 
-Verified evidence for this slice is 64 focused tests in the current workspace, a real Chromium run against `examples/fixtures/web/server.mjs`, and a passed run report under `.testpilot/runs/`. Hosted server, GitHub, distributed Runner, mobile, and AI Worker tasks remain pending as described below.
+Verified evidence for this slice is 64 focused tests in the current workspace, a real Chromium run against `examples/fixtures/web/server.mjs`, and a passed run report under `.testpilot/runs/`. The hosted server, GitHub adapter, scheduler, storage/secret SDKs, and MCP bridge now also have local reference implementations; external credentials, durable infrastructure, device execution, and hosted deployment remain explicit verification gates.
 
-The next server slice now includes a real Fastify API under `apps/server`, tenant-scoped in-process persistence for local development, asynchronous run IDs, OpenAPI output, cross-tenant integration tests, and `infra/postgres/migrations/001_initial.sql` with organization-scoped tables and RLS policies. PostgreSQL-backed persistence, GitHub OAuth/App, and production authorization remain pending.
+The server slice includes a real Fastify API under `apps/server`, tenant-scoped in-process persistence for local development, asynchronous run IDs, OpenAPI output, cross-tenant integration tests, OAuth route wiring, and `infra/postgres/migrations/001_initial.sql` with organization-scoped tables and RLS policies. The current runtime adapter is intentionally local; production PostgreSQL authorization and GitHub App credentials remain deployment gates.
 
 Release gates are: local vertical slice; source-first analysis and safe repair; tenant-safe API/GitHub team mode; distributed Docker Runner; API/mobile/mixed execution; AI Worker; CI/CD and self-hosted release artifacts.

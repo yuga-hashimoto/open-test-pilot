@@ -1,0 +1,10 @@
+{
+  "name": "@open-test-pilot/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": { "testpilot-mcp": "./dist/index.js" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "lint": "tsc --noEmit --pretty false", "typecheck": "tsc --build", "test": "vitest run", "build": "tsc --build" }
+}

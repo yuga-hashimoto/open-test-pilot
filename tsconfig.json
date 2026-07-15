@@ -37,6 +37,7 @@
     { "path": "packages/custom-action-sdk" },
     { "path": "packages/storage-adapter" },
     { "path": "packages/secret-provider-sdk" },
+    { "path": "packages/mcp-server" },
     { "path": "apps/server" }
   ]
 }
