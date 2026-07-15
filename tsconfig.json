@@ -32,6 +32,7 @@
     { "path": "packages/report" },
     { "path": "packages/local-runner" },
     { "path": "packages/cli" },
+    { "path": "packages/github-adapter" },
     { "path": "apps/server" }
   ]
 }
