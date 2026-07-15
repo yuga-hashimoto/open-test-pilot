@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAppiumCapabilities, generateWebdriverIoTest, locatorCandidates, parseAndroidUiDump, parseIosAccessibilityJson } from './index.js';
+import { buildAppiumCapabilities, executeMobileActionsWithDriver, generateWebdriverIoTest, locatorCandidates, parseAndroidUiDump, parseIosAccessibilityJson } from './index.js';
 
 describe('Appium adapter', () => {
   it('builds platform-specific capabilities and parses Android evidence', () => {
@@ -14,5 +14,13 @@ describe('Appium adapter', () => {
     const code = generateWebdriverIoTest({ platform: 'ios', deviceName: 'iPhone 16' }, [{ type: 'tap', locator: { strategy: 'accessibility id', value: 'login', confidence: 0.98, source: 'test' } }]);
     expect(code).toContain("import { remote } from 'webdriverio'");
     expect(code).toContain('deleteSession');
+  });
+
+  it('executes mobile actions through a driver boundary', async () => {
+    const calls: string[] = [];
+    const driver = { async $(selector: string) { calls.push(`find:${selector}`); return { async click() { calls.push('click'); }, async setValue(value: string) { calls.push(`input:${value}`); }, async getText() { return 'Welcome'; } }; }, async deleteSession() { calls.push('close'); } };
+    const result = await executeMobileActionsWithDriver(driver, [{ type: 'tap', locator: { strategy: 'accessibility id', value: 'login', confidence: 1, source: 'test' } }, { type: 'assertText', locator: { strategy: 'id', value: 'welcome', confidence: 1, source: 'test' }, value: 'Welcome' }]);
+    expect(result.status).toBe('passed');
+    expect(calls).toEqual(['find:~login', 'click', 'find:id=welcome']);
   });
 });

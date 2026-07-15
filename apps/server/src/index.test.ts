@@ -153,4 +153,26 @@ describe('OpenTestPilot server API', () => {
     expect(body.body).toBe('hello');
     await app.close();
   });
+
+  it('moves a run through queued, running, and completed runner states', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Lifecycle' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } });
+    const testId = test.json<{ id: string }>().id;
+    const run = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } });
+    const runId = run.json<{ runId: string }>().runId;
+    const runner = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runners`, headers: { 'x-organization-id': organizationId }, payload: { name: 'runner', capabilities: { browsers: ['chromium'], maxConcurrency: 1 } } });
+    const runnerId = runner.json<{ runnerId: string }>().runnerId;
+    const leased = await app.inject({ method: 'POST', url: `/v1/runners/${runnerId}/lease`, headers: { 'x-organization-id': organizationId } });
+    const jobId = leased.json<{ job: { jobId: string } }>().job.jobId;
+    const running = await app.inject({ method: 'GET', url: `/v1/runs/${runId}`, headers: { 'x-organization-id': organizationId } });
+    expect(running.json<{ status: string }>().status).toBe('running');
+    await app.inject({ method: 'POST', url: `/v1/jobs/${jobId}/complete`, headers: { 'x-organization-id': organizationId }, payload: { status: 'passed' } });
+    const completed = await app.inject({ method: 'GET', url: `/v1/runs/${runId}`, headers: { 'x-organization-id': organizationId } });
+    expect(completed.json<{ status: string }>().status).toBe('passed');
+    await app.close();
+  });
 });

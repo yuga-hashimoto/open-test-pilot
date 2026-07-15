@@ -125,7 +125,7 @@ interface RunParams { runId: string }
 interface CreateOrganizationBody { name: string }
 interface CreateProjectBody { name: string }
 interface CreateTestBody { projectId: string; name: string; manifestId: string }
-interface CreateRunBody { projectId: string; testId: string }
+interface CreateRunBody { projectId: string; testId: string; priority?: number; requiredLabels?: string[] }
 interface TenantHeaders { 'x-organization-id'?: string }
 interface GitHubStartQuery { redirectUri?: string }
 interface GitHubCallbackQuery { code?: string; state?: string }
@@ -226,13 +226,12 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     const body = request.body;
     if (typeof body?.projectId !== 'string' || typeof body.testId !== 'string') return reply.code(400).send({ error: 'projectId and testId are required' });
-    if (await repository.getProject(request.params.organizationId, body.projectId) === undefined || await repository.getTest(request.params.organizationId, body.testId) === undefined) return reply.code(404).send({ error: 'project or test not found' });
+    const project = await repository.getProject(request.params.organizationId, body.projectId);
+    const test = await repository.getTest(request.params.organizationId, body.testId);
+    if (project === undefined || test === undefined) return reply.code(404).send({ error: 'project or test not found' });
     const run = await repository.createRun(request.params.organizationId, body.projectId, body.testId);
-    setTimeout(async () => {
-      const startedAt = new Date().toISOString();
-      await repository.updateRun(run.id, { status: 'running', startedAt });
-      await repository.updateRun(run.id, { status: 'passed', endedAt: new Date().toISOString() });
-    }, 10);
+    const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId: request.params.organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', ...(body.priority === undefined ? {} : { priority: body.priority }), ...(body.requiredLabels === undefined ? {} : { requiredLabels: body.requiredLabels }) };
+    if (!await executionQueue.enqueue(request.params.organizationId, job)) { await repository.updateRun(run.id, { status: 'failed', endedAt: new Date().toISOString() }); return reply.code(503).send({ error: 'run queue unavailable' }); }
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
 
@@ -309,6 +308,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
     const job = await executionQueue.lease(organizationId, request.params.runnerId);
+    if (job !== undefined) await repository.updateRun(job.runId, { status: 'running', startedAt: new Date().toISOString() });
     return reply.send({ job: job ?? null });
   });
 
@@ -320,6 +320,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (status !== 'passed' && status !== 'failed' && status !== 'cancelled') return reply.code(400).send({ error: 'status must be passed, failed, or cancelled' });
     const result = await executionQueue.complete(tenantId(request) ?? '', request.params.jobId, status);
     if (result === undefined) return reply.code(404).send({ error: 'leased job not found' });
+    await repository.updateRun(result.runId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() });
     return reply.send({ jobId: result.jobId, status: result.status });
   });
 

@@ -54,3 +54,31 @@ export function generateWebdriverIoTest(capabilities: MobileCapabilities, action
   lines.push('} finally {', '  await browser.deleteSession();', '}');
   return `${lines.join('\n')}\n`;
 }
+
+export interface MobileDriver { $(selector: string): Promise<{ click(): Promise<void>; setValue(value: string): Promise<void>; getText(): Promise<string> }>; deleteSession(): Promise<void>; }
+export interface MobileExecutionResult { status: 'passed' | 'failed'; error?: string; actions: Array<{ type: string; status: 'passed' | 'failed'; error?: string }>; }
+
+export async function executeMobileActionsWithDriver(driver: MobileDriver, actions: Array<{ type: 'tap' | 'input' | 'assertText'; locator: LocatorCandidate; value?: string }>): Promise<MobileExecutionResult> {
+  const results: MobileExecutionResult['actions'] = [];
+  try {
+    for (const action of actions) {
+      const element = await driver.$(webdriverSelector(action.locator));
+      if (action.type === 'tap') await element.click();
+      if (action.type === 'input') await element.setValue(action.value ?? '');
+      if (action.type === 'assertText' && await element.getText() !== (action.value ?? '')) throw new Error(`Expected mobile text ${action.value ?? ''}`);
+      results.push({ type: action.type, status: 'passed' });
+    }
+    return { status: 'passed', actions: results };
+  } catch (error) {
+    results.push({ type: actions[results.length]?.type ?? 'unknown', status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    return { status: 'failed', error: error instanceof Error ? error.message : String(error), actions: results };
+  }
+}
+
+export async function executeMobileActions(capabilities: MobileCapabilities, actions: Array<{ type: 'tap' | 'input' | 'assertText'; locator: LocatorCandidate; value?: string }>): Promise<MobileExecutionResult> {
+  const { remote } = await import('webdriverio');
+  const driver = await remote({ capabilities: buildAppiumCapabilities(capabilities) });
+  try { return await executeMobileActionsWithDriver(driver as unknown as MobileDriver, actions); } finally { await driver.deleteSession(); }
+}
+
+function webdriverSelector(locator: LocatorCandidate): string { if (locator.strategy === 'id') return `id=${locator.value}`; if (locator.strategy === 'accessibility id') return `~${locator.value}`; if (locator.strategy === '-ios predicate string') return `-ios predicate string:${locator.value}`; return locator.value; }
