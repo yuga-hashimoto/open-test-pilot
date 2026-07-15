@@ -77,4 +77,16 @@ describe('OpenTestPilot server API', () => {
     expect(openapi.json<{ paths: Record<string, unknown> }>().paths['/v1/organizations/{organizationId}/runs']).toBeDefined();
     await app.close();
   });
+
+  it('exposes GitHub OAuth start and validates callback state', async () => {
+    process.env['GITHUB_CLIENT_ID'] = 'client-id';
+    const app = buildServer();
+    const start = await app.inject({ method: 'GET', url: '/auth/github/start?redirectUri=https%3A%2F%2Fpilot.test%2Fcallback' });
+    expect(start.statusCode).toBe(200);
+    expect(start.json<{ authorizationUrl: string }>().authorizationUrl).toContain('client_id=client-id');
+    const callback = await app.inject({ method: 'GET', url: '/auth/github/callback?code=unused&state=wrong' });
+    expect(callback.statusCode).toBe(400);
+    delete process.env['GITHUB_CLIENT_ID'];
+    await app.close();
+  });
 });

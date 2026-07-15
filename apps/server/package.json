@@ -11,5 +11,8 @@
     "build": "tsc --build",
     "start": "node dist/index.js"
   },
-  "dependencies": { "fastify": "^5.6.1" }
+  "dependencies": {
+    "@open-test-pilot/github-adapter": "workspace:*",
+    "fastify": "^5.6.1"
+  }
 }

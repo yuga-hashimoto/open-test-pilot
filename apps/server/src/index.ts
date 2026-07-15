@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { buildGitHubAuthorizationUrl, exchangeGitHubOAuthCode } from '@open-test-pilot/github-adapter';
 
 export interface Organization {
   id: string;
@@ -113,6 +114,8 @@ interface CreateProjectBody { name: string }
 interface CreateTestBody { projectId: string; name: string; manifestId: string }
 interface CreateRunBody { projectId: string; testId: string }
 interface TenantHeaders { 'x-organization-id'?: string }
+interface GitHubStartQuery { redirectUri?: string }
+interface GitHubCallbackQuery { code?: string; state?: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
   return request.headers['x-organization-id'];
@@ -133,6 +136,26 @@ function requireTenant(request: FastifyRequest<{ Headers: TenantHeaders }>, repl
 
 export function buildServer(repository: TenantRepository = new InMemoryTenantRepository()): FastifyInstance {
   const app = Fastify({ logger: false });
+  const oauthStates = new Set<string>();
+
+  app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
+    const clientId = process.env['GITHUB_CLIENT_ID'];
+    if (clientId === undefined) return reply.code(503).send({ error: 'GitHub OAuth is not configured' });
+    const state = randomUUID();
+    oauthStates.add(state);
+    const redirectUri = request.query.redirectUri ?? process.env['GITHUB_REDIRECT_URI'] ?? 'http://localhost:3001/auth/github/callback';
+    return reply.send({ authorizationUrl: buildGitHubAuthorizationUrl({ clientId, redirectUri, state }) });
+  });
+
+  app.get<{ Querystring: GitHubCallbackQuery }>('/auth/github/callback', async (request, reply) => {
+    const { code, state } = request.query;
+    if (code === undefined || state === undefined || !oauthStates.delete(state)) return reply.code(400).send({ error: 'invalid OAuth callback state' });
+    const clientId = process.env['GITHUB_CLIENT_ID'];
+    const clientSecret = process.env['GITHUB_CLIENT_SECRET'];
+    if (clientId === undefined || clientSecret === undefined) return reply.code(503).send({ error: 'GitHub OAuth is not configured' });
+    const token = await exchangeGitHubOAuthCode(code, clientId, clientSecret);
+    return reply.send({ authenticated: true, tokenType: token.tokenType, scope: token.scope });
+  });
 
   app.post<{ Body: CreateOrganizationBody }>('/v1/organizations', async (request, reply) => {
     if (typeof request.body?.name !== 'string' || request.body.name.trim().length === 0) {
