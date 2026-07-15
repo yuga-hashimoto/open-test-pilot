@@ -26,6 +26,9 @@ importers:
       '@open-test-pilot/agent-protocol':
         specifier: workspace:*
         version: link:../../packages/agent-protocol
+      '@open-test-pilot/github-adapter':
+        specifier: workspace:*
+        version: link:../../packages/github-adapter
 
   apps/runner:
     dependencies:
@@ -162,7 +165,11 @@ importers:
 
   packages/mcp-server: {}
 
-  packages/notification-adapter: {}
+  packages/notification-adapter:
+    dependencies:
+      '@open-test-pilot/github-adapter':
+        specifier: workspace:*
+        version: link:../github-adapter
 
   packages/playwright-adapter:
     dependencies:

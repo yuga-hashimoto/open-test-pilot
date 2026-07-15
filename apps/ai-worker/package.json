@@ -5,5 +5,5 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": { "lint": "tsc --noEmit --pretty false", "typecheck": "tsc --build", "test": "vitest run", "build": "tsc --build", "start": "node dist/index.js" },
-  "dependencies": { "@open-test-pilot/agent-protocol": "workspace:*" }
+  "dependencies": { "@open-test-pilot/agent-protocol": "workspace:*", "@open-test-pilot/github-adapter": "workspace:*" }
 }
