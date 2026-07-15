@@ -51,6 +51,10 @@ export class Scheduler {
     return { ...lease.job, status };
   }
 
+  public getLeasedJob(jobId: string): Job | undefined {
+    return this.leases.get(jobId)?.job;
+  }
+
   public expireLeases(now = Date.now()): string[] {
     const expired: string[] = [];
     for (const [jobId, lease] of this.leases) {

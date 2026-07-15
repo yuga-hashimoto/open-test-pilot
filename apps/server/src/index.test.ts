@@ -89,4 +89,31 @@ describe('OpenTestPilot server API', () => {
     delete process.env['GITHUB_CLIENT_ID'];
     await app.close();
   });
+
+  it('registers a runner, leases a tenant job, and rejects cross-tenant completion', async () => {
+    const app = buildServer();
+    const first = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Runner Org' } });
+    const firstOrg = first.json<{ id: string }>().id;
+    const second = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Other Org' } });
+    const secondOrg = second.json<{ id: string }>().id;
+    const runner = await app.inject({
+      method: 'POST',
+      url: `/v1/organizations/${firstOrg}/runners`,
+      headers: { 'x-organization-id': firstOrg },
+      payload: { name: 'Chromium runner', capabilities: { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] } },
+    });
+    expect(runner.statusCode).toBe(201);
+    const runnerId = runner.json<{ runnerId: string }>().runnerId;
+    const job = { jobId: 'job-1', runId: 'run-1', organizationId: firstOrg, manifest: { schemaVersion: '1.0.0', id: 'login', name: 'Login' }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: new Date().toISOString(), requiredLabels: ['linux'] };
+    const queued = await app.inject({ method: 'POST', url: `/v1/organizations/${firstOrg}/jobs`, headers: { 'x-organization-id': firstOrg }, payload: { job } });
+    expect(queued.statusCode).toBe(202);
+    const lease = await app.inject({ method: 'POST', url: `/v1/runners/${runnerId}/lease`, headers: { 'x-organization-id': firstOrg } });
+    expect(lease.statusCode).toBe(200);
+    expect(lease.json<{ job: { jobId: string } }>().job.jobId).toBe('job-1');
+    const denied = await app.inject({ method: 'POST', url: '/v1/jobs/job-1/complete', headers: { 'x-organization-id': secondOrg }, payload: { status: 'passed' } });
+    expect(denied.statusCode).toBe(403);
+    const completed = await app.inject({ method: 'POST', url: '/v1/jobs/job-1/complete', headers: { 'x-organization-id': firstOrg }, payload: { status: 'passed' } });
+    expect(completed.statusCode).toBe(200);
+    await app.close();
+  });
 });
