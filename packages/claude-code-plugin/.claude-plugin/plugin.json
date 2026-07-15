@@ -1,0 +1,9 @@
+{
+  "name": "open-test-pilot",
+  "version": "0.1.0",
+  "description": "Source-first test design, Manifest generation, Playwright execution, evidence analysis, and safe repair for OpenTestPilot.",
+  "author": { "name": "OpenTestPilot contributors" },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/open-test-pilot/open-test-pilot",
+  "keywords": ["testing", "playwright", "appium", "qa", "manifest"]
+}

@@ -1,0 +1,42 @@
+schemaVersion: "1.0.0"
+id: fixture-login
+name: Fixture login
+description: Executes a real local browser flow against the fixture app
+type: e2e
+tags:
+  - smoke
+priority: high
+preconditions: []
+variables: []
+secrets: []
+setup: []
+steps:
+  - id: login
+    description: Sign in
+    actions:
+      - id: open-login
+        type: web.goto
+        url: http://127.0.0.1:4173/login
+      - id: fill-email
+        type: web.fill
+        selector: "label=メールアドレス"
+        value: test@example.com
+      - id: submit-login
+        type: web.click
+        selector: "role=button[name=ログイン]"
+      - id: assert-dashboard
+        type: web.expectVisible
+        selector: "[data-testid=dashboard]"
+cleanup: []
+artifacts:
+  screenshots: after
+runner:
+  minBrowsers:
+    - chromium
+permissions:
+  networkAccess: true
+source:
+  repository: local
+  path: examples/manifests/fixture-login.yaml
+generatedCode:
+  path: generated/fixture-login.spec.ts

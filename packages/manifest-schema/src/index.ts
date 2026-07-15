@@ -1,0 +1,287 @@
+import { Ajv } from 'ajv';
+import type { ValidateFunction } from 'ajv';
+
+export const DefaultManifestSchemaVersion = '1.0.0' as const;
+
+export const SupportedActions = [
+  'web.goto',
+  'web.fill',
+  'web.click',
+  'web.expectVisible',
+  'web.expectText',
+  'web.screenshot',
+  'api.request',
+] as const;
+
+export const ReservedControlNodes = [
+  'if',
+  'forEach',
+  'retry',
+  'parallel',
+  'try',
+] as const;
+
+export type ManifestActionType = (typeof SupportedActions)[number];
+
+export interface ManifestVariable {
+  name: string;
+  defaultValue?: string;
+}
+
+export interface ManifestSecretRef {
+  name: string;
+  provider: string;
+  reference: string;
+}
+
+export interface ManifestAction {
+  id: string;
+  type: string;
+  name?: string;
+  url?: string;
+  selector?: string;
+  value?: string;
+  expectedText?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+export interface ManifestStep {
+  id: string;
+  description?: string;
+  actions: ManifestAction[];
+  output?: Record<string, string>;
+}
+
+export interface Manifest {
+  schemaVersion: string;
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+  tags?: string[];
+  priority?: string;
+  preconditions: string[];
+  variables: ManifestVariable[];
+  secrets: ManifestSecretRef[];
+  setup: ManifestStep[];
+  steps: ManifestStep[];
+  cleanup: ManifestStep[];
+  artifacts: { screenshots: string; traces?: boolean };
+  runner: { minBrowsers: string[] };
+  permissions: { networkAccess: boolean; fileSystem?: boolean };
+  source: { repository: string; path: string };
+  generatedCode: { path: string };
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: null | Array<{
+    instancePath: string;
+    keyword: string;
+    message?: string | undefined;
+    params: Record<string, unknown>;
+    schemaPath: string;
+  }>;
+}
+
+export const manifestJsonSchema = {
+  type: 'object',
+  required: [
+    'schemaVersion',
+    'id',
+    'name',
+    'description',
+    'type',
+    'tags',
+    'priority',
+    'preconditions',
+    'variables',
+    'secrets',
+    'setup',
+    'steps',
+    'cleanup',
+    'artifacts',
+    'runner',
+    'permissions',
+    'source',
+    'generatedCode',
+  ],
+  properties: {
+    schemaVersion: { const: DefaultManifestSchemaVersion },
+    id: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    type: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' } },
+    priority: { type: 'string' },
+    preconditions: { type: 'array', items: { type: 'string' } },
+    variables: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string' },
+          defaultValue: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+    },
+    secrets: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['name', 'provider', 'reference'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          provider: { type: 'string' },
+          reference: { type: 'string', pattern: '^\\$\\{secret:[A-Za-z_][A-Za-z0-9_]*\\}$' },
+        },
+        // Secret refs must not contain a literal value field
+        not: { required: ['value'] },
+      },
+    },
+    setup: { type: 'array', items: { $ref: '#/$defs/step' } },
+    steps: { type: 'array', items: { $ref: '#/$defs/step' } },
+    cleanup: { type: 'array', items: { $ref: '#/$defs/step' } },
+    artifacts: {
+      type: 'object',
+      required: ['screenshots'],
+      properties: {
+        screenshots: { type: 'string' },
+        traces: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    runner: {
+      type: 'object',
+      required: ['minBrowsers'],
+      properties: {
+        minBrowsers: { type: 'array', items: { type: 'string' } },
+      },
+      additionalProperties: false,
+    },
+    permissions: {
+      type: 'object',
+      required: ['networkAccess'],
+      properties: {
+        networkAccess: { type: 'boolean' },
+        fileSystem: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    source: {
+      type: 'object',
+      required: ['repository', 'path'],
+      properties: {
+        repository: { type: 'string' },
+        path: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    generatedCode: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+  $defs: {
+    step: {
+      type: 'object',
+      required: ['id', 'actions'],
+      properties: {
+        id: { type: 'string' },
+        description: { type: 'string' },
+        actions: {
+          type: 'array',
+          items: { $ref: '#/$defs/action' },
+        },
+        output: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+        },
+      },
+      additionalProperties: false,
+    },
+    action: {
+      type: 'object',
+      required: ['id', 'type'],
+      properties: {
+        id: { type: 'string' },
+        type: {
+          type: 'string',
+          enum: SupportedActions,
+        },
+        name: { type: 'string' },
+        url: { type: 'string' },
+        selector: { type: 'string' },
+        value: { type: 'string' },
+        expectedText: { type: 'string' },
+        method: { type: 'string' },
+        headers: { type: 'object' },
+        body: {},
+      },
+      additionalProperties: false,
+      allOf: [
+        {
+          if: { properties: { type: { const: 'web.goto' } } },
+          then: { required: ['url'] },
+        },
+        {
+          if: { properties: { type: { const: 'web.fill' } } },
+          then: { required: ['selector', 'value'] },
+        },
+        {
+          if: { properties: { type: { const: 'web.click' } } },
+          then: { required: ['selector'] },
+        },
+        {
+          if: { properties: { type: { const: 'web.expectVisible' } } },
+          then: { required: ['selector'] },
+        },
+        {
+          if: { properties: { type: { const: 'web.expectText' } } },
+          then: { required: ['selector', 'expectedText'] },
+        },
+        {
+          if: { properties: { type: { const: 'api.request' } } },
+          then: { required: ['method', 'url'] },
+        },
+      ],
+    },
+  },
+} as const;
+
+let cachedValidator: ValidateFunction | undefined;
+
+export function createManifestValidator(): (data: unknown) => ValidationResult {
+  if (!cachedValidator) {
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    cachedValidator = ajv.compile(manifestJsonSchema);
+  }
+  const validate = cachedValidator as ValidateFunction;
+  return (data: unknown): ValidationResult => {
+    const valid = validate(data);
+    if (valid) {
+      return { valid: true, errors: null };
+    }
+    const errs = validate.errors ?? [];
+    return {
+      valid: false,
+      errors: errs.map((e) => ({
+        instancePath: e.instancePath,
+        keyword: e.keyword,
+        message: e.message ?? undefined,
+        params: e.params as Record<string, unknown>,
+        schemaPath: e.schemaPath,
+      })),
+    };
+  };
+}

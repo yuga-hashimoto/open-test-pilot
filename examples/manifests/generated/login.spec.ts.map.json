@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "manifestId": "login",
+  "generatorVersion": "0.1.0",
+  "nodes": [
+    {
+      "nodeId": "open-login",
+      "kind": "action",
+      "startLine": 5,
+      "endLine": 6
+    },
+    {
+      "nodeId": "fill-email",
+      "kind": "action",
+      "startLine": 7,
+      "endLine": 8
+    },
+    {
+      "nodeId": "submit-login",
+      "kind": "action",
+      "startLine": 9,
+      "endLine": 10
+    },
+    {
+      "nodeId": "assert-dashboard",
+      "kind": "action",
+      "startLine": 11,
+      "endLine": 12
+    },
+    {
+      "nodeId": "login",
+      "kind": "step",
+      "startLine": 4,
+      "endLine": 12
+    }
+  ]
+}

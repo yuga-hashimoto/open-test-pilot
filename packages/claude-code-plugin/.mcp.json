@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "open-test-pilot": {
+      "command": "testpilot-mcp",
+      "args": [],
+      "env": { "OPENTESTPILOT_URL": "${OPENTESTPILOT_URL}" }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@open-test-pilot/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": { "testpilot": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "lint": "tsc --noEmit --pretty false",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@open-test-pilot/generator": "workspace:*",
+    "@open-test-pilot/local-runner": "workspace:*",
+    "@open-test-pilot/manifest-parser": "workspace:*",
+    "@open-test-pilot/report": "workspace:*",
+    "@open-test-pilot/result-schema": "workspace:*"
+  }
+}

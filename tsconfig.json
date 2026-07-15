@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true
+  },
+  "files": [],
+  "references": [
+    { "path": "packages/result-schema" },
+    { "path": "packages/manifest-schema" },
+    { "path": "packages/agent-protocol" },
+    { "path": "packages/runner-protocol" },
+    { "path": "packages/manifest-parser" },
+    { "path": "packages/generator" },
+    { "path": "packages/playwright-adapter" },
+    { "path": "packages/report" },
+    { "path": "packages/local-runner" },
+    { "path": "packages/cli" }
+  ]
+}

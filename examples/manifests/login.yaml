@@ -1,0 +1,45 @@
+schemaVersion: "1.0.0"
+id: login
+name: ログインできる
+description: ログイン画面からダッシュボードへ遷移できることを確認する
+type: e2e
+tags:
+  - smoke
+  - login
+priority: high
+preconditions: []
+variables:
+  - name: baseUrl
+    defaultValue: http://localhost:3000
+secrets: []
+setup: []
+steps:
+  - id: login
+    description: ユーザー情報を入力してログインする
+    actions:
+      - id: open-login
+        type: web.goto
+        url: "${var.baseUrl}/login"
+      - id: fill-email
+        type: web.fill
+        selector: "label=メールアドレス"
+        value: "test@example.com"
+      - id: submit-login
+        type: web.click
+        selector: "role=button[name=ログイン]"
+      - id: assert-dashboard
+        type: web.expectVisible
+        selector: "[data-testid=dashboard]"
+cleanup: []
+artifacts:
+  screenshots: after
+runner:
+  minBrowsers:
+    - chromium
+permissions:
+  networkAccess: true
+source:
+  repository: local
+  path: examples/manifests/login.yaml
+generatedCode:
+  path: generated/login.spec.ts
