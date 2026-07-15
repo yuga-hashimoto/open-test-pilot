@@ -34,6 +34,9 @@
     { "path": "packages/cli" },
     { "path": "packages/github-adapter" },
     { "path": "packages/scheduler" },
+    { "path": "packages/custom-action-sdk" },
+    { "path": "packages/storage-adapter" },
+    { "path": "packages/secret-provider-sdk" },
     { "path": "apps/server" }
   ]
 }

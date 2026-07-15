@@ -53,6 +53,8 @@ importers:
         specifier: workspace:*
         version: link:../result-schema
 
+  packages/custom-action-sdk: {}
+
   packages/generator:
     dependencies:
       '@open-test-pilot/manifest-schema':
@@ -125,6 +127,10 @@ importers:
       '@open-test-pilot/runner-protocol':
         specifier: workspace:*
         version: link:../runner-protocol
+
+  packages/secret-provider-sdk: {}
+
+  packages/storage-adapter: {}
 
 packages:
 
