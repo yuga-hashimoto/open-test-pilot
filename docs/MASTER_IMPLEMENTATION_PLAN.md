@@ -26,4 +26,6 @@ Completed in the foundation slice:
 
 Verified evidence for this slice is 64 focused tests in the current workspace, a real Chromium run against `examples/fixtures/web/server.mjs`, and a passed run report under `.testpilot/runs/`. Hosted server, GitHub, distributed Runner, mobile, and AI Worker tasks remain pending as described below.
 
+The next server slice now includes a real Fastify API under `apps/server`, tenant-scoped in-process persistence for local development, asynchronous run IDs, OpenAPI output, cross-tenant integration tests, and `infra/postgres/migrations/001_initial.sql` with organization-scoped tables and RLS policies. PostgreSQL-backed persistence, GitHub OAuth/App, and production authorization remain pending.
+
 Release gates are: local vertical slice; source-first analysis and safe repair; tenant-safe API/GitHub team mode; distributed Docker Runner; API/mobile/mixed execution; AI Worker; CI/CD and self-hosted release artifacts.
