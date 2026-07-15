@@ -7,6 +7,7 @@ import type { Job } from '@open-test-pilot/runner-protocol';
 import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
 import { verifyWebhookSignature } from '@open-test-pilot/github-adapter';
 import { MemoryExecutionQueue, RedisExecutionQueue, type ExecutionQueue } from '@open-test-pilot/queue-adapter';
+import { LocalStorageAdapter, S3StorageAdapter, type StorageAdapter } from '@open-test-pilot/storage-adapter';
 import { PostgresTenantRepository } from './postgres.js';
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -135,6 +136,8 @@ interface JobParams { jobId: string }
 interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled' }
 interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
 interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
+interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
+interface ArtifactRecord { id: string; organizationId: string; runId: string; key: string; contentType: string; size: number; createdAt: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
   return request.headers['x-organization-id'];
@@ -158,11 +161,13 @@ export function createConfiguredRepository(): TenantRepository {
 }
 
 export function createConfiguredExecutionQueue(): ExecutionQueue { return process.env['REDIS_URL'] === undefined ? new MemoryExecutionQueue() : new RedisExecutionQueue(process.env['REDIS_URL']); }
+export function createConfiguredArtifactStore(): StorageAdapter { if (process.env['S3_BUCKET'] !== undefined) return new S3StorageAdapter({ bucket: process.env['S3_BUCKET'], ...(process.env['S3_ENDPOINT'] === undefined ? {} : { endpoint: process.env['S3_ENDPOINT'] }), ...(process.env['S3_REGION'] === undefined ? {} : { region: process.env['S3_REGION'] }), ...(process.env['S3_ACCESS_KEY_ID'] === undefined ? {} : { accessKeyId: process.env['S3_ACCESS_KEY_ID'] }), ...(process.env['S3_SECRET_ACCESS_KEY'] === undefined ? {} : { secretAccessKey: process.env['S3_SECRET_ACCESS_KEY'] }) }); return new LocalStorageAdapter(process.env['ARTIFACT_DIR'] ?? '.testpilot/artifacts'); }
 
-export function buildServer(repository: TenantRepository = createConfiguredRepository(), executionQueue: ExecutionQueue = createConfiguredExecutionQueue()): FastifyInstance {
+export function buildServer(repository: TenantRepository = createConfiguredRepository(), executionQueue: ExecutionQueue = createConfiguredExecutionQueue(), artifactStore: StorageAdapter = createConfiguredArtifactStore()): FastifyInstance {
   const app = Fastify({ logger: false });
   const oauthStates = new Set<string>();
   const schedules = new Map<string, ScheduleRecord>();
+  const artifacts = new Map<string, ArtifactRecord>();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
@@ -251,6 +256,29 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ runId: run.id, status: run.status, reportUrl: `/v1/runs/${run.id}/report` });
   });
 
+  app.post<{ Params: RunParams; Headers: TenantHeaders; Body: CreateArtifactBody }>('/v1/runs/:runId/artifacts', async (request, reply) => {
+    const run = await repository.getRun(request.params.runId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.key !== 'string' || typeof body.contentType !== 'string' || typeof body.bodyBase64 !== 'string') return reply.code(400).send({ error: 'key, contentType, and bodyBase64 are required' });
+    let bytes: Buffer;
+    try { bytes = Buffer.from(body.bodyBase64, 'base64'); } catch { return reply.code(400).send({ error: 'bodyBase64 is invalid' }); }
+    const record = { id: `artifact-${randomUUID()}`, organizationId: run.organizationId, runId: run.id, key: body.key, contentType: body.contentType, size: bytes.byteLength, createdAt: new Date().toISOString() };
+    await artifactStore.put({ organizationId: run.organizationId, key: `${run.id}/${record.id}/${body.key}`, body: bytes, contentType: body.contentType });
+    artifacts.set(record.id, record);
+    return reply.code(201).send(record);
+  });
+
+  app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId', async (request, reply) => {
+    const record = artifacts.get(request.params.artifactId);
+    if (record === undefined) return reply.code(404).send({ error: 'artifact not found' });
+    if (!requireTenant(request, reply, record.organizationId)) return reply;
+    const bytes = await artifactStore.get({ organizationId: record.organizationId, key: `${record.runId}/${record.id}/${record.key}` });
+    if (bytes === undefined) return reply.code(404).send({ error: 'artifact body not found' });
+    return reply.type(record.contentType).send(bytes);
+  });
+
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateRunnerBody }>('/v1/organizations/:organizationId/runners', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     const body = request.body;
@@ -328,6 +356,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/runs': { get: {}, post: {} },
     '/v1/runs/{runId}': { get: {} },
     '/v1/runs/{runId}/report': { get: {} },
+    '/v1/runs/{runId}/artifacts': { post: {} },
+    '/v1/artifacts/{artifactId}': { get: {} },
     '/v1/organizations/{organizationId}/runners': { post: {} },
     '/v1/runners/{runnerId}/heartbeat': { post: {} },
     '/v1/organizations/{organizationId}/jobs': { post: {} },

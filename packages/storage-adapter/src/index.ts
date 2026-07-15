@@ -1,5 +1,6 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 export interface PutArtifactInput {
   organizationId: string;
@@ -49,3 +50,19 @@ export class LocalStorageAdapter implements StorageAdapter {
     return path;
   }
 }
+
+export interface S3StorageOptions { endpoint?: string; region?: string; bucket: string; accessKeyId?: string; secretAccessKey?: string; forcePathStyle?: boolean; }
+
+export class S3StorageAdapter implements StorageAdapter {
+  private readonly client: Pick<S3Client, 'send'>;
+  private readonly bucket: string;
+  constructor(options: S3StorageOptions, client?: Pick<S3Client, 'send'>) {
+    this.client = client ?? new S3Client({ region: options.region ?? 'us-east-1', ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }), forcePathStyle: options.forcePathStyle ?? options.endpoint !== undefined, ...(options.accessKeyId === undefined || options.secretAccessKey === undefined ? {} : { credentials: { accessKeyId: options.accessKeyId, secretAccessKey: options.secretAccessKey } }) });
+    this.bucket = options.bucket;
+  }
+  async put(input: PutArtifactInput): Promise<void> { await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key), Body: input.body, ContentType: input.contentType })); }
+  async get(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<Buffer | undefined> { try { const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key) })); if (result.Body === undefined) return undefined; return Buffer.from(await result.Body.transformToByteArray()); } catch (error) { if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') return undefined; throw error; } }
+  async delete(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<void> { await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key) })); }
+}
+
+function scopedKey(organizationId: string, key: string): string { if (organizationId.includes('/') || key.startsWith('/') || key.split('/').includes('..')) throw new Error('Storage key escapes organization boundary'); return `${organizationId}/${key}`; }

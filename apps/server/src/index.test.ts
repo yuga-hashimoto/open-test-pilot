@@ -134,4 +134,23 @@ describe('OpenTestPilot server API', () => {
     expect(webhook.statusCode).toBe(503);
     await app.close();
   });
+
+  it('uploads and reads an organization-scoped artifact', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Artifacts' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } });
+    const testId = test.json<{ id: string }>().id;
+    const run = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } });
+    const runId = run.json<{ runId: string }>().runId;
+    const artifact = await app.inject({ method: 'POST', url: `/v1/runs/${runId}/artifacts`, headers: { 'x-organization-id': organizationId }, payload: { key: 'stdout.log', contentType: 'text/plain', bodyBase64: Buffer.from('hello').toString('base64') } });
+    expect(artifact.statusCode).toBe(201);
+    const artifactId = artifact.json<{ id: string }>().id;
+    const body = await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': organizationId } });
+    expect(body.statusCode).toBe(200);
+    expect(body.body).toBe('hello');
+    await app.close();
+  });
 });

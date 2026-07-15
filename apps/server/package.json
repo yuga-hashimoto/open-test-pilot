@@ -15,6 +15,7 @@
     "@open-test-pilot/github-adapter": "workspace:*",
     "@open-test-pilot/runner-protocol": "workspace:*",
     "@open-test-pilot/queue-adapter": "workspace:*",
+    "@open-test-pilot/storage-adapter": "workspace:*",
     "@open-test-pilot/scheduler": "workspace:*",
     "@open-test-pilot/trigger-adapter": "workspace:*",
     "@fastify/cors": "^10.0.2",

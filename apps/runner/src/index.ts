@@ -6,6 +6,7 @@ export interface RunnerClient {
   heartbeat(runnerId: string): Promise<void>;
   lease(runnerId: string): Promise<Job | undefined>;
   complete(jobId: string, status: 'passed' | 'failed' | 'cancelled'): Promise<void>;
+  uploadArtifact(runId: string, input: { key: string; contentType: string; body: Uint8Array }): Promise<{ artifactId: string }>;
 }
 
 export function createRunnerClient(baseUrl: string, organizationId: string): RunnerClient {
@@ -30,6 +31,12 @@ export function createRunnerClient(baseUrl: string, organizationId: string): Run
       const response = await fetch(`${baseUrl}/v1/jobs/${jobId}/complete`, { method: 'POST', headers, body: JSON.stringify({ status }) });
       if (!response.ok) throw new Error(`job completion failed with ${response.status}`);
     },
+    async uploadArtifact(runId, input) {
+      const response = await fetch(`${baseUrl}/v1/runs/${runId}/artifacts`, { method: 'POST', headers, body: JSON.stringify({ key: input.key, contentType: input.contentType, bodyBase64: Buffer.from(input.body).toString('base64') }) });
+      if (!response.ok) throw new Error(`artifact upload failed with ${response.status}`);
+      const artifact = await response.json() as { id: string };
+      return { artifactId: artifact.id };
+    },
   };
 }
 
@@ -48,6 +55,8 @@ export async function runRunnerLoop(client: RunnerClient, options: RunnerLoopOpt
     const job = await client.lease(registration.runnerId);
     if (job !== undefined) {
       const result = await executeInDocker(job, options.docker);
+      await client.uploadArtifact(job.runId, { key: 'runner/stdout.log', contentType: 'text/plain', body: Buffer.from(result.stdout) });
+      await client.uploadArtifact(job.runId, { key: 'runner/stderr.log', contentType: 'text/plain', body: Buffer.from(result.stderr) });
       await client.complete(job.jobId, result.exitCode === 0 ? 'passed' : 'failed');
     }
     if (options.once === true) return;
