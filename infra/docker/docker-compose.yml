@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: opentestpilot
+      POSTGRES_USER: opentestpilot
+      POSTGRES_PASSWORD: opentestpilot-dev-only
+    ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../postgres/migrations:/docker-entrypoint-initdb.d:ro
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: opentestpilot
+      MINIO_ROOT_PASSWORD: opentestpilot-dev-only
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+  server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.server
+    environment:
+      PORT: "3001"
+      DATABASE_URL: postgresql://opentestpilot:opentestpilot-dev-only@postgres:5432/opentestpilot
+    depends_on: [postgres, redis, minio]
+    ports: ["3001:3001"]
+  web:
+    image: node:22-bookworm-slim
+    working_dir: /workspace
+    command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm --filter @open-test-pilot/web dev -- --host 0.0.0.0"]
+    volumes: ["../..:/workspace"]
+    ports: ["4173:4173"]
+    depends_on: [server]
+  runner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.runner
+    environment:
+      OPENTESTPILOT_URL: http://server:3001
+      OPENTESTPILOT_ORGANIZATION_ID: ${OPENTESTPILOT_ORGANIZATION_ID:?set an organization id before starting runner}
+      RUNNER_IMAGE: ${RUNNER_IMAGE:-ghcr.io/open-test-pilot/runner:latest}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [server]
+
+volumes:
+  postgres-data:
+  minio-data:

@@ -38,6 +38,10 @@
     { "path": "packages/storage-adapter" },
     { "path": "packages/secret-provider-sdk" },
     { "path": "packages/mcp-server" },
+    { "path": "packages/appium-adapter" },
+    { "path": "packages/notification-adapter" },
+    { "path": "packages/trigger-adapter" },
+    { "path": "apps/ai-worker" },
     { "path": "apps/server" },
     { "path": "apps/runner" }
   ]

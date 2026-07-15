@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { buildGitHubAuthorizationUrl, exchangeGitHubOAuthCode } from '@open-test-pilot/github-adapter';
 import { Scheduler, type RunnerCapabilities } from '@open-test-pilot/scheduler';
 import type { Job } from '@open-test-pilot/runner-protocol';
+import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
+import { verifyWebhookSignature } from '@open-test-pilot/github-adapter';
 import { PostgresTenantRepository } from './postgres.js';
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -126,6 +128,8 @@ interface CreateJobBody { job: Job }
 interface RunnerParams { runnerId: string }
 interface JobParams { jobId: string }
 interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled' }
+interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
+interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
   return request.headers['x-organization-id'];
@@ -154,6 +158,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const scheduler = new Scheduler();
   const runnerOrganizations = new Map<string, string>();
   const runners = new Map<string, RunnerCapabilities>();
+  const schedules = new Map<string, ScheduleRecord>();
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
     const clientId = process.env['GITHUB_CLIENT_ID'];
@@ -283,6 +288,31 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ jobId: result.jobId, status: result.status });
   });
 
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateScheduleBody }>('/v1/organizations/:organizationId/schedules', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.projectId !== 'string' || typeof body.testId !== 'string' || typeof body.cron !== 'string') return reply.code(400).send({ error: 'projectId, testId, and cron are required' });
+    try { validateCronExpression(body.cron); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
+    if (await repository.getProject(request.params.organizationId, body.projectId) === undefined || await repository.getTest(request.params.organizationId, body.testId) === undefined) return reply.code(404).send({ error: 'project or test not found' });
+    const schedule = { id: `schedule-${randomUUID()}`, organizationId: request.params.organizationId, projectId: body.projectId, testId: body.testId, cron: validateCronExpression(body.cron), enabled: body.enabled ?? true, createdAt: new Date().toISOString() };
+    schedules.set(schedule.id, schedule);
+    return reply.code(201).send(schedule);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/schedules', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ schedules: [...schedules.values()].filter((schedule) => schedule.organizationId === request.params.organizationId) });
+  });
+
+  app.post<{ Headers: { 'x-hub-signature-256'?: string; 'x-github-delivery'?: string; 'x-github-event'?: string }; Body: Record<string, unknown> }>('/v1/webhooks/github', async (request, reply) => {
+    const secret = process.env['GITHUB_WEBHOOK_SECRET'];
+    if (secret === undefined) return reply.code(503).send({ error: 'GitHub webhook verification is not configured' });
+    const signature = request.headers['x-hub-signature-256'];
+    const deliveryId = request.headers['x-github-delivery'];
+    if (signature === undefined || deliveryId === undefined || !verifyWebhookSignature(JSON.stringify(request.body), signature, secret)) return reply.code(401).send({ error: 'invalid webhook signature' });
+    return reply.code(202).send({ accepted: true, deliveryId, event: request.headers['x-github-event'] ?? 'unknown' });
+  });
+
   app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: {
     '/v1/organizations': { post: {} },
     '/v1/organizations/{organizationId}': { get: {} },
@@ -296,6 +326,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/jobs': { post: {} },
     '/v1/runners/{runnerId}/lease': { post: {} },
     '/v1/jobs/{jobId}/complete': { post: {} },
+    '/v1/organizations/{organizationId}/schedules': { get: {}, post: {} },
+    '/v1/webhooks/github': { post: {} },
   } }));
 
   return app;

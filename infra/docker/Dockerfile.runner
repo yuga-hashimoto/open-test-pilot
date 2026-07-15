@@ -1,0 +1,16 @@
+FROM node:22-bookworm-slim AS build
+WORKDIR /workspace
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
+COPY packages/runner-protocol ./packages/runner-protocol
+COPY apps/runner ./apps/runner
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @open-test-pilot/runner build
+
+FROM docker:27-cli
+RUN apk add --no-cache nodejs npm
+WORKDIR /app
+COPY --from=build /workspace/apps/runner/dist ./dist
+COPY --from=build /workspace/apps/runner/package.json ./package.json
+ENV NODE_ENV=production
+CMD ["node", "dist/index.js"]

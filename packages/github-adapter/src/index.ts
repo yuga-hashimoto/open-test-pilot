@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, createSign, timingSafeEqual } from 'node:crypto';
 
 export interface GitHubOAuthConfig {
   clientId: string;
@@ -11,6 +11,31 @@ export interface GitHubOAuthToken {
   accessToken: string;
   tokenType: string;
   scope: string;
+}
+
+export interface GitHubAppConfig { appId: string; privateKey: string; }
+export interface GitHubInstallationToken { token: string; expiresAt: string; permissions?: Record<string, string>; }
+
+function base64Url(value: string | Uint8Array): string { return Buffer.from(value).toString('base64url'); }
+
+export function buildGitHubAppJwt(config: GitHubAppConfig, now = Math.floor(Date.now() / 1000)): string {
+  const header = base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = base64Url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: config.appId }));
+  const unsigned = `${header}.${payload}`;
+  const signer = createSign('RSA-SHA256');
+  signer.update(unsigned);
+  signer.end();
+  return `${unsigned}.${signer.sign(config.privateKey).toString('base64url')}`;
+}
+
+export async function createGitHubInstallationToken(installationId: number, config: GitHubAppConfig, fetchImpl: typeof fetch = fetch): Promise<GitHubInstallationToken> {
+  const response = await fetchImpl(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+    method: 'POST',
+    headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${buildGitHubAppJwt(config)}`, 'x-github-api-version': '2022-11-28' },
+  });
+  const body = await response.json() as { token?: string; expires_at?: string; permissions?: Record<string, string>; message?: string };
+  if (!response.ok || body.token === undefined || body.expires_at === undefined) throw new Error(`GitHub installation token exchange failed: ${body.message ?? response.statusText}`);
+  return { token: body.token, expiresAt: body.expires_at, ...(body.permissions === undefined ? {} : { permissions: body.permissions }) };
 }
 
 export function buildGitHubAuthorizationUrl(config: GitHubOAuthConfig): string {

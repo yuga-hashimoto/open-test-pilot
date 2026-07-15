@@ -116,4 +116,22 @@ describe('OpenTestPilot server API', () => {
     expect(completed.statusCode).toBe(200);
     await app.close();
   });
+
+  it('creates tenant-scoped schedules and exposes an explicit webhook configuration gate', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Schedules' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } });
+    const testId = test.json<{ id: string }>().id;
+    const schedule = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/schedules`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId, cron: '0 9 * * 1' } });
+    expect(schedule.statusCode).toBe(201);
+    expect(schedule.json<{ cron: string; enabled: boolean }>().enabled).toBe(true);
+    const invalid = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/schedules`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId, cron: 'tomorrow morning' } });
+    expect(invalid.statusCode).toBe(400);
+    const webhook = await app.inject({ method: 'POST', url: '/v1/webhooks/github', payload: { action: 'push' } });
+    expect(webhook.statusCode).toBe(503);
+    await app.close();
+  });
 });
