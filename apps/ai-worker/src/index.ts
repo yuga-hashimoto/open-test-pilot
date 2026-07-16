@@ -21,10 +21,14 @@ export class ClaudeCodeWorker {
   constructor(private readonly options: ClaudeCodeWorkerOptions) { this.policy = options.policy ?? defaultWorkerPolicy; }
 
   async handle(request: AgentRequest): Promise<AgentResult> {
+    return this.handleInDirectory(request, this.options.cwd);
+  }
+
+  async handleInDirectory(request: AgentRequest, cwd: string): Promise<AgentResult> {
     try { validateWorkerRequest(request, this.policy); } catch (error) { return rejected(request, error); }
     const prompt = JSON.stringify({ operation: request.operation, repository: request.repository, constraints: request.constraints, artifacts: request.requestArtifacts });
     try {
-      const result = await execFileAsync(this.options.command ?? 'claude', ['--print', prompt], { cwd: this.options.cwd, timeout: this.options.timeoutMs ?? 300_000, maxBuffer: 4 * 1024 * 1024 });
+      const result = await execFileAsync(this.options.command ?? 'claude', ['--print', prompt], { cwd, timeout: this.options.timeoutMs ?? 300_000, maxBuffer: 4 * 1024 * 1024 });
       return { requestId: request.requestId, protocolVersion: request.protocolVersion, status: 'completed', findings: [{ type: 'worker-output', severity: 'info', source: { file: request.repository.url }, message: result.stdout.trim().slice(0, 20_000) }] };
     } catch (error) {
       return { requestId: request.requestId, protocolVersion: request.protocolVersion, status: 'failed', findings: [{ type: 'worker-error', severity: 'error', source: { file: request.repository.url }, message: error instanceof Error ? error.message : String(error) }] };

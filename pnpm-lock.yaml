@@ -38,6 +38,18 @@ importers:
 
   apps/runner:
     dependencies:
+      '@open-test-pilot/local-runner':
+        specifier: workspace:*
+        version: link:../../packages/local-runner
+      '@open-test-pilot/manifest-schema':
+        specifier: workspace:*
+        version: link:../../packages/manifest-schema
+      '@open-test-pilot/report':
+        specifier: workspace:*
+        version: link:../../packages/report
+      '@open-test-pilot/result-schema':
+        specifier: workspace:*
+        version: link:../../packages/result-schema
       '@open-test-pilot/runner-protocol':
         specifier: workspace:*
         version: link:../../packages/runner-protocol

@@ -24,3 +24,4 @@ examples/**/*.js.map
 .env.*
 !.env.example
 .secrets/
+.playwright-cli/

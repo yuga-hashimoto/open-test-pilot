@@ -164,6 +164,9 @@ describe('OpenTestPilot server API', () => {
     const artifact = await app.inject({ method: 'POST', url: `/v1/runs/${runId}/artifacts`, headers: { 'x-organization-id': organizationId }, payload: { key: 'stdout.log', contentType: 'text/plain', bodyBase64: Buffer.from('hello').toString('base64') } });
     expect(artifact.statusCode).toBe(201);
     const artifactId = artifact.json<{ id: string }>().id;
+    const listed = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/artifacts`, headers: { 'x-organization-id': organizationId } });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json<{ artifacts: Array<{ id: string }> }>().artifacts).toEqual([expect.objectContaining({ id: artifactId })]);
     const body = await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': organizationId } });
     expect(body.statusCode).toBe(200);
     expect(body.body).toBe('hello');

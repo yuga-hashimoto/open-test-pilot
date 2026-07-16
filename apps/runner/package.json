@@ -5,6 +5,6 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": { "lint": "tsc --noEmit --pretty false", "typecheck": "tsc --build", "test": "vitest run", "build": "tsc --build", "start": "tsx dist/index.js" },
-  "dependencies": { "@open-test-pilot/runner-protocol": "workspace:*", "tsx": "^4.23.1" },
+  "dependencies": { "@open-test-pilot/local-runner": "workspace:*", "@open-test-pilot/manifest-schema": "workspace:*", "@open-test-pilot/report": "workspace:*", "@open-test-pilot/runner-protocol": "workspace:*", "@open-test-pilot/result-schema": "workspace:*", "tsx": "^4.23.1" },
   "devDependencies": { "@types/node": "^22.15.0" }
 }

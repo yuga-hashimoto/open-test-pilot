@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import type { Organization, Project, RunRecord, ServerRunStatus, TenantRepository, TestRecord } from './index.js';
+import type { Organization, Project, RunRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -123,6 +123,38 @@ export class PostgresTenantRepository implements TenantRepository {
     return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('UPDATE runs SET status = COALESCE($2, status), started_at = COALESCE($3, started_at), ended_at = COALESCE($4, ended_at) WHERE id = $1 RETURNING id, organization_id, project_id, test_id, status, created_at, started_at, ended_at', [id, patch.status ?? null, patch.startedAt ?? null, patch.endedAt ?? null]);
       return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+    });
+  }
+
+  async saveRunResult(organizationId: string, runId: string, result: StoredRunResult): Promise<void> {
+    await this.tenantQuery(organizationId, async (client) => {
+      const status = typeof result['status'] === 'string' ? result['status'] : 'unknown';
+      const protocolVersion = typeof result['protocolVersion'] === 'string' ? result['protocolVersion'] : '1.0.0';
+      await client.query('DELETE FROM test_results WHERE organization_id = $1 AND run_id = $2', [organizationId, runId]);
+      await client.query('INSERT INTO test_results (organization_id, run_id, protocol_version, status, metadata) VALUES ($1, $2, $3, $4, $5::jsonb)', [organizationId, runId, protocolVersion, status, JSON.stringify(result)]);
+      for (const step of result.steps) {
+        if (step === null || typeof step !== 'object') continue;
+        const value = step as { stepId?: unknown; status?: unknown; actions?: unknown };
+        if (typeof value.stepId !== 'string' || typeof value.status !== 'string') continue;
+        await client.query('INSERT INTO step_results (organization_id, run_id, step_id, status, result) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (organization_id, run_id, step_id) DO UPDATE SET status = EXCLUDED.status, result = EXCLUDED.result', [organizationId, runId, value.stepId, value.status, JSON.stringify(step)]);
+        if (!Array.isArray(value.actions)) continue;
+        for (const action of value.actions) {
+          if (action === null || typeof action !== 'object') continue;
+          const actionValue = action as { actionId?: unknown; status?: unknown };
+          if (typeof actionValue.actionId !== 'string' || typeof actionValue.status !== 'string') continue;
+          await client.query('INSERT INTO action_results (organization_id, run_id, step_id, action_id, status, result) VALUES ($1, $2, $3, $4, $5, $6::jsonb) ON CONFLICT (organization_id, run_id, action_id) DO UPDATE SET status = EXCLUDED.status, result = EXCLUDED.result', [organizationId, runId, value.stepId, actionValue.actionId, actionValue.status, JSON.stringify(action)]);
+        }
+      }
+    });
+  }
+
+  async getRunResult(organizationId: string, runId: string): Promise<StoredRunResult | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ metadata: unknown }>('SELECT metadata FROM test_results WHERE organization_id = $1 AND run_id = $2', [organizationId, runId]);
+      const row = result.rows[0];
+      if (row === undefined || row.metadata === null || typeof row.metadata !== 'object' || Array.isArray(row.metadata)) return undefined;
+      const steps = await client.query<{ result: unknown }>('SELECT result FROM step_results WHERE organization_id = $1 AND run_id = $2 ORDER BY created_at, step_id', [organizationId, runId]);
+      return { ...(row.metadata as Record<string, unknown>), steps: steps.rows.map((step) => step.result) as unknown[], failures: Array.isArray((row.metadata as { failures?: unknown }).failures) ? (row.metadata as { failures: unknown[] }).failures : [] };
     });
   }
 }

@@ -47,6 +47,12 @@ export interface RunRecord {
   endedAt?: string;
 }
 
+export interface StoredRunResult {
+  failures: unknown[];
+  steps: unknown[];
+  [key: string]: unknown;
+}
+
 export interface TenantRepository {
   createOrganization(name: string): MaybePromise<Organization>;
   getOrganization(id: string): MaybePromise<Organization | undefined>;
@@ -61,6 +67,8 @@ export interface TenantRepository {
   getRun(id: string, organizationId?: string): MaybePromise<RunRecord | undefined>;
   listRuns(organizationId: string): MaybePromise<RunRecord[]>;
   updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, organizationId?: string): MaybePromise<RunRecord | undefined>;
+  saveRunResult(organizationId: string, runId: string, result: StoredRunResult): MaybePromise<void>;
+  getRunResult(organizationId: string, runId: string): MaybePromise<StoredRunResult | undefined>;
 }
 
 export class InMemoryTenantRepository implements TenantRepository {
@@ -69,6 +77,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly tests = new Map<string, TestRecord>();
   private readonly runs = new Map<string, RunRecord>();
   private readonly manifests = new Map<string, unknown>();
+  private readonly runResults = new Map<string, StoredRunResult>();
 
   createOrganization(name: string): Organization {
     const organization = { id: `org-${randomUUID()}`, name, createdAt: new Date().toISOString() };
@@ -131,6 +140,10 @@ export class InMemoryTenantRepository implements TenantRepository {
     this.runs.set(id, updated);
     return updated;
   }
+
+  saveRunResult(_organizationId: string, runId: string, result: StoredRunResult): void { this.runResults.set(runId, result); }
+
+  getRunResult(_organizationId: string, runId: string): StoredRunResult | undefined { return this.runResults.get(runId); }
 }
 
 interface OrganizationParams { organizationId: string }
@@ -193,7 +206,6 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const changeRequests = new Map<string, ChangeRequestRecord>();
   const repairs = new Map<string, RepairRecord>();
   const pullRequests = new Map<string, PullRequestRecord>();
-  const runResults = new Map<string, { failures: unknown[]; steps: unknown[]; [key: string]: unknown }>();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
@@ -343,7 +355,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const test = await repository.getTest(request.params.organizationId, body.testId);
     if (project === undefined || test === undefined) return reply.code(404).send({ error: 'project or test not found' });
     const run = await repository.createRun(request.params.organizationId, body.projectId, body.testId);
-    const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId: request.params.organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', ...(body.priority === undefined ? {} : { priority: body.priority }), ...(body.requiredLabels === undefined ? {} : { requiredLabels: body.requiredLabels }) };
+    const manifestDocument = await repository.getTestManifest(request.params.organizationId, test.id);
+    const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId: request.params.organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, ...(manifestDocument === undefined ? {} : { manifestDocument }), requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', ...(body.priority === undefined ? {} : { priority: body.priority }), ...(body.requiredLabels === undefined ? {} : { requiredLabels: body.requiredLabels }) };
     if (!await executionQueue.enqueue(request.params.organizationId, job)) { await repository.updateRun(run.id, { status: 'failed', endedAt: new Date().toISOString() }, request.params.organizationId); return reply.code(503).send({ error: 'run queue unavailable' }); }
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
@@ -378,7 +391,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
-    return reply.send({ runId: run.id, failures: runResults.get(run.id)?.failures ?? [] });
+    const result = await repository.getRunResult(run.organizationId, run.id);
+    return reply.send({ runId: run.id, failures: result?.failures ?? [] });
   });
 
   app.get<{ Params: StepParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
@@ -387,7 +401,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
-    const step = runResults.get(run.id)?.steps.find((candidate) => candidate !== null && typeof candidate === 'object' && (candidate as { stepId?: unknown }).stepId === request.params.stepId);
+    const result = await repository.getRunResult(run.organizationId, run.id);
+    const step = result?.steps.find((candidate) => candidate !== null && typeof candidate === 'object' && (candidate as { stepId?: unknown }).stepId === request.params.stepId);
     return step === undefined ? reply.code(404).send({ error: 'step result not found' }) : reply.send(step);
   });
 
@@ -436,6 +451,15 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     await artifactStore.put({ organizationId: run.organizationId, key: `${run.id}/${record.id}/${body.key}`, body: bytes, contentType: body.contentType });
     artifacts.set(record.id, record);
     return reply.code(201).send(record);
+  });
+
+  app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/artifacts', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    return reply.send({ runId: run.id, artifacts: [...artifacts.values()].filter((artifact) => artifact.runId === run.id && artifact.organizationId === run.organizationId) });
   });
 
   app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId', async (request, reply) => {
@@ -491,13 +515,16 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   app.post<{ Params: JobParams; Headers: TenantHeaders; Body: CompleteJobBody }>('/v1/jobs/:jobId/complete', async (request, reply) => {
     const leasedJob = await executionQueue.getJob(request.params.jobId);
     if (leasedJob === undefined) return reply.code(404).send({ error: 'leased job not found' });
-    if (leasedJob.organizationId !== tenantId(request)) return reply.code(403).send({ error: 'organization access denied' });
+    const leasedOrganizationId = leasedJob.organizationId;
+    if (leasedOrganizationId === undefined || leasedOrganizationId !== tenantId(request)) return reply.code(403).send({ error: 'organization access denied' });
     const status = request.body?.status;
     if (status !== 'passed' && status !== 'failed' && status !== 'cancelled') return reply.code(400).send({ error: 'status must be passed, failed, or cancelled' });
     const result = await executionQueue.complete(tenantId(request) ?? '', request.params.jobId, status);
     if (result === undefined) return reply.code(404).send({ error: 'leased job not found' });
-    if (request.body?.result !== undefined) runResults.set(result.runId, { ...request.body.result, failures: request.body.result.failures ?? [], steps: request.body.result.steps ?? [] });
-    await repository.updateRun(result.runId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() }, leasedJob.organizationId);
+    const completedRunId = result.runId ?? leasedJob.runId;
+    if (completedRunId === undefined) return reply.code(500).send({ error: 'completed job did not include run id' });
+    if (request.body?.result !== undefined) await repository.saveRunResult(leasedOrganizationId, completedRunId, { ...request.body.result, failures: request.body.result.failures ?? [], steps: request.body.result.steps ?? [] });
+    await repository.updateRun(completedRunId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() }, leasedOrganizationId);
     return reply.send({ jobId: result.jobId, status: result.status });
   });
 
@@ -545,7 +572,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/runs/{runId}/steps/{stepId}': { get: {} },
     '/v1/runs/{runId}/compare/{baselineRunId}': { get: {} },
     '/v1/runs/{runId}/repair': { post: {} },
-    '/v1/runs/{runId}/artifacts': { post: {} },
+    '/v1/runs/{runId}/artifacts': { post: {}, get: {} },
     '/v1/artifacts/{artifactId}': { get: {} },
     '/v1/artifacts/{artifactId}/metadata': { get: {} },
     '/v1/pull-requests': { post: {} },

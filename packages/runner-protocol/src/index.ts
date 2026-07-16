@@ -44,6 +44,8 @@ export interface Job {
   jobId: string;
   runId: string;
   manifest: ManifestReference;
+  /** The immutable manifest snapshot assigned to this job, when remote execution needs it. */
+  manifestDocument?: unknown;
   requestedCapabilities: Capabilities;
   status: JobStatus;
   createdAt: string;

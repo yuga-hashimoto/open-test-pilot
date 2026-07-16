@@ -363,7 +363,10 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
   try {
     await mkdir(options.outputDir, { recursive: true });
     const browserType = browserName === 'chromium' ? chromium : (await import('playwright'))[browserName];
-    browser = await browserType.launch();
+    browser = await browserType.launch({
+      ...(process.env['PLAYWRIGHT_EXECUTABLE_PATH'] === undefined ? {} : { executablePath: process.env['PLAYWRIGHT_EXECUTABLE_PATH'] }),
+      ...(process.env['PLAYWRIGHT_NO_SANDBOX'] === 'true' ? { args: ['--no-sandbox', '--disable-crashpad', '--disable-crash-reporter', '--disable-breakpad', '--noerrdialogs'] } : {}),
+    });
     browserContext = await browser.newContext({ viewport: metadata.viewport });
     if (manifest.artifacts.traces === true) {
       await browserContext.tracing.start({ screenshots: true, snapshots: true, sources: false });
