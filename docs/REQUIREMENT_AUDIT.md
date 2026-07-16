@@ -2,6 +2,12 @@
 
 This is the live audit of the attached platform design against `main`. It is intentionally explicit about external gates and areas that are not yet complete.
 
+## Current verification note (2026-07-17)
+
+The implementation was extended after the previous `main` audit: generated Manifest conditions now evaluate comparisons, function calls have scoped arguments, control-flow bounds are validated, `waitUntil` executes its child actions, external Unit/Component/Integration results are imported through the server, artifact retention deletion removes both storage and metadata with an audit event, the web editor exposes natural-language/form/custom-code/results surfaces, and generated/license/release CI gates are executable.
+
+The exact live evidence and environment gates are recorded in [ACCEPTANCE_EVIDENCE.md](ACCEPTANCE_EVIDENCE.md). An installed GitHub App is not the same as a successful App JWT write, a generated Appium test is not a device run, and a Docker executor test is not a successful image build when the local daemon cannot create a network.
+
 | Design area | Current evidence | Status |
 | --- | --- | --- |
 | Manifest schema and stable IDs | `packages/manifest-schema`, AJV tests, YAML parser/normalizer | Implemented for the supported v1 action set |

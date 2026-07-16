@@ -81,6 +81,9 @@ function valueExpression(value: string, manifest: Manifest): string {
   const namespace = interpolation[1];
   const name = interpolation[2] ?? '';
   const suffix = interpolation[3] ?? '';
+  if (namespace === 'steps' || namespace === 'secret' || (namespace === 'var' && manifest.variables.some((candidate) => candidate.name === name && candidate.defaultValue === undefined))) {
+    return `resolveValue(${quote(value)})`;
+  }
   if (namespace === 'steps' || (namespace === 'var' && manifest.variables.every((candidate) => candidate.name !== name))) {
     return `resolveValue(${quote(value)})${suffix.length > 0 ? ` + ${quote(suffix)}` : ''}`;
   }
@@ -141,7 +144,7 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
         const identifier = action.id.replace(/[^A-Za-z0-9_$]/g, '_');
         const expectedStatuses = Array.isArray(action.expectedStatus) ? action.expectedStatus : [action.expectedStatus ?? 200];
         return [
-          `${indent}const response_${identifier} = await request.fetch(${valueExpression(action.url ?? '', manifest)}, { method: ${quote(action.method ?? 'GET')}, headers: ${anyExpression(action.headers ?? {}, manifest)}, data: ${anyExpression(action.body, manifest)} });`,
+          `${indent}const response_${identifier} = await request.fetch(${valueExpression(action.url ?? '', manifest)}, { method: ${quote(action.method ?? 'GET')}, headers: ${anyExpression(action.headers ?? {}, manifest)} as Record<string, string>, data: ${anyExpression(action.body, manifest)} });`,
           `${indent}expect([${expectedStatuses.join(', ')}]).toContain(response_${identifier}.status());`,
           `${indent}const body_${identifier} = await response_${identifier}.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });`,
           ...Object.entries(action.jsonAssertions ?? {}).map(([path, expected]) => `${indent}expect(readPath(body_${identifier}, ${quote(path)})).toEqual(${JSON.stringify(expected)});`),
@@ -149,7 +152,7 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
         ];
       }
     case 'control.if':
-      return [`${indent}if (truthy(${valueExpression(action.condition ?? '', manifest)})) {`];
+      return [`${indent}if (resolveCondition(${quote(action.condition ?? '')})) {`];
     case 'control.forEach':
       return [`${indent}for (const ${safeIdentifier(action.variable ?? 'item')} of asArray(${anyExpression(action.items ?? [], manifest)})) {`];
     case 'control.switch':
@@ -157,7 +160,7 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
     case 'control.for':
       return [`${indent}for (let ${safeIdentifier(action.variable ?? 'index')} = ${action.from ?? 0}; ${safeIdentifier(action.variable ?? 'index')} < ${action.to ?? 0}; ${safeIdentifier(action.variable ?? 'index')} += ${action.step ?? 1}) {`];
     case 'control.while':
-      return [`${indent}let whileAttempts = 0;`, `${indent}while (whileAttempts < ${action.maxAttempts ?? 30} && truthy(${valueExpression(action.condition ?? '', manifest)})) {`];
+      return [`${indent}let whileAttempts = 0;`, `${indent}while (whileAttempts < ${action.maxAttempts ?? 30} && resolveCondition(${quote(action.condition ?? '')})) {`];
     case 'control.retry':
       return [`${indent}for (let attempt = 1; attempt <= ${action.maxAttempts ?? 3}; attempt += 1) {`, `${indent}  try {`];
     case 'control.try':
@@ -169,7 +172,7 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
     case 'control.race':
       return [`${indent}await Promise.race([`];
     case 'control.waitUntil':
-      return [`${indent}for (let waitAttempt = 1; waitAttempt <= ${action.maxAttempts ?? 30}; waitAttempt += 1) {`, `${indent}  if (truthy(${valueExpression(action.condition ?? '', manifest)})) break;`, `${indent}  await new Promise((resolve) => setTimeout(resolve, ${action.pollMs ?? 250}));`, `${indent}}`];
+      return [`${indent}for (let waitAttempt = 1; waitAttempt <= ${action.maxAttempts ?? 30}; waitAttempt += 1) {`, `${indent}  if (resolveCondition(${quote(action.condition ?? '')})) break;`, `${indent}  await new Promise((resolve) => setTimeout(resolve, ${action.pollMs ?? 250}));`, `${indent}}`];
     case 'control.break':
       return [`${indent}break;`];
     case 'control.continue':
@@ -179,7 +182,7 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
     case 'control.set':
       return [`${indent}vars[${quote(action.variable ?? action.name ?? action.id)}] = ${anyExpression(action.value ?? '', manifest)};`];
     case 'control.call':
-      return [`${indent}await callFunction(${quote(action.functionName ?? action.name ?? action.id)}, ${JSON.stringify(action.arguments ?? {})});`];
+      return [`${indent}await callFunction(${quote(action.functionName ?? action.name ?? action.id)}, resolveAny(${JSON.stringify(action.arguments ?? {})}) as Record<string, unknown>);`];
     case 'custom.action':
       return [`${indent}stepOutputs[${quote(action.id)}] = await customAction(${quote(action.actionType ?? action.name ?? action.id)}, ${JSON.stringify(action.input ?? {})});`];
     default:
@@ -259,6 +262,11 @@ function appendAction(lines: string[], sourceMap: SourceMapNode[], action: Manif
       lines.push(`${indent}  })(),`);
     }
     lines.push(`${indent}]);`);
+  } else if (action.type === 'control.waitUntil') {
+    const waitLines = actionLines(action, manifest, indent);
+    lines.push(...waitLines.slice(0, -1));
+    for (const child of action.children ?? []) appendAction(lines, sourceMap, child, manifest, `${indent}  `);
+    lines.push(waitLines.at(-1) ?? `${indent}}`);
   } else {
     lines.push(...actionLines(action, manifest, indent));
   }
@@ -293,16 +301,54 @@ export function generatePlaywright(manifest: Manifest, options: GeneratePlaywrig
     '};',
     ...(options.customActionModule === undefined ? ['const customAction = async (_type: string, _input: unknown): Promise<unknown> => { throw new Error(`Custom Action is not registered: ${_type}`); };'] : ['const customAction = async (type: string, input: Record<string, unknown>): Promise<unknown> => { const executor = customActions[type]; if (executor === undefined) throw new Error(`Custom Action is not registered: ${type}`); return executor.execute({ runId: "generated", getSecret: async (name: string) => process.env[name], writeArtifact: async () => "generated-artifact" }, resolveAny(input) as Record<string, unknown>); };']),
     'const truthy = (value: unknown): boolean => value !== false && value !== null && value !== undefined && value !== "" && value !== "false" && value !== "0";',
+    'const parseConditionValue = (value: string): unknown => {',
+    '  const trimmed = value.trim();',
+    `  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) return trimmed.slice(1, -1);`,
+    '  if (trimmed === "true") return true;',
+    '  if (trimmed === "false") return false;',
+    '  if (trimmed === "null") return null;',
+    '  const number = Number(trimmed);',
+    '  if (trimmed !== "" && Number.isFinite(number)) return number;',
+    '  try { return JSON.parse(trimmed) as unknown; } catch { return trimmed; }',
+    '};',
+    'const resolveCondition = (expression: string): boolean => {',
+    '  const evaluateAtom = (atom: string): boolean => {',
+    '    const source = resolveValue(atom.trim());',
+    '    const match = /^(.+?)\\s*(===|!==|==|!=|>=|<=|>|<)\\s*(.+)$/.exec(source);',
+    '    if (match === null) return truthy(parseConditionValue(source));',
+    '    const left = parseConditionValue(match[1] ?? "");',
+    '    const right = parseConditionValue(match[3] ?? "");',
+    '    switch (match[2]) {',
+    '      case "===": return left === right;',
+    '      case "!==": return left !== right;',
+    '      case "==": return left == right;',
+    '      case "!=": return left != right;',
+    '      case ">": return typeof left === "number" && typeof right === "number" && left > right;',
+    '      case "<": return typeof left === "number" && typeof right === "number" && left < right;',
+    '      case ">=": return typeof left === "number" && typeof right === "number" && left >= right;',
+    '      case "<=": return typeof left === "number" && typeof right === "number" && left <= right;',
+      '      default: return false;',
+    '    }',
+    '  };',
+    '  return expression.split(/\\s*\\|\\|\\s*/).some((orPart) => orPart.split(/\\s*&&\\s*/).every(evaluateAtom));',
+    '};',
     'const asArray = (value: unknown): unknown[] => { if (Array.isArray(value)) return value; if (typeof value !== "string") return []; try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; } };',
     '',
     `test(${quote(manifest.name)}, async ({ page, request }) => {`,
   ];
   const sourceMap: SourceMapNode[] = [];
   if ((manifest.functions ?? []).length > 0) {
-    lines.push('  const callFunction = async (name: string, _args: Record<string, unknown>): Promise<void> => {');
+    lines.push('  const callFunction = async (name: string, args: Record<string, unknown>): Promise<void> => {');
     for (const func of manifest.functions ?? []) {
       lines.push(`    if (name === ${quote(func.id)}) {`);
-      for (const action of func.actions) appendAction(lines, sourceMap, action, manifest, '      ');
+      lines.push('      const previousVars = { ...vars };');
+      lines.push('      try {');
+      lines.push('        for (const [name, value] of Object.entries(args)) vars[name] = value;');
+      for (const action of func.actions) appendAction(lines, sourceMap, action, manifest, '        ');
+      lines.push('      } finally {');
+      lines.push('        for (const name of Object.keys(vars)) delete vars[name];');
+      lines.push('        Object.assign(vars, previousVars);');
+      lines.push('      }');
       lines.push('      return;');
       lines.push('    }');
     }

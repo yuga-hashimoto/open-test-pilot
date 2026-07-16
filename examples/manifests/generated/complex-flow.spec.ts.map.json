@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "manifestId": "complex-flow",
+  "generatorVersion": "0.1.0",
+  "nodes": [
+    {
+      "nodeId": "function-dashboard",
+      "kind": "action",
+      "startLine": 55,
+      "endLine": 56
+    },
+    {
+      "nodeId": "create-user-request",
+      "kind": "action",
+      "startLine": 66,
+      "endLine": 71
+    },
+    {
+      "nodeId": "create-user",
+      "kind": "step",
+      "startLine": 65,
+      "endLine": 71
+    },
+    {
+      "nodeId": "open-login",
+      "kind": "action",
+      "startLine": 74,
+      "endLine": 75
+    },
+    {
+      "nodeId": "fill-email",
+      "kind": "action",
+      "startLine": 76,
+      "endLine": 77
+    },
+    {
+      "nodeId": "submit-login",
+      "kind": "action",
+      "startLine": 78,
+      "endLine": 79
+    },
+    {
+      "nodeId": "assert-dashboard",
+      "kind": "action",
+      "startLine": 80,
+      "endLine": 81
+    },
+    {
+      "nodeId": "login",
+      "kind": "step",
+      "startLine": 73,
+      "endLine": 81
+    },
+    {
+      "nodeId": "branch-dashboard",
+      "kind": "action",
+      "startLine": 86,
+      "endLine": 87
+    },
+    {
+      "nodeId": "branch-failure",
+      "kind": "action",
+      "startLine": 89,
+      "endLine": 90
+    },
+    {
+      "nodeId": "logged-in-branch",
+      "kind": "action",
+      "startLine": 84,
+      "endLine": 91
+    },
+    {
+      "nodeId": "list-products",
+      "kind": "action",
+      "startLine": 92,
+      "endLine": 96
+    },
+    {
+      "nodeId": "record-product",
+      "kind": "action",
+      "startLine": 100,
+      "endLine": 101
+    },
+    {
+      "nodeId": "record-products",
+      "kind": "action",
+      "startLine": 97,
+      "endLine": 102
+    },
+    {
+      "nodeId": "branch-and-loop",
+      "kind": "step",
+      "startLine": 83,
+      "endLine": 102
+    },
+    {
+      "nodeId": "health",
+      "kind": "action",
+      "startLine": 108,
+      "endLine": 112
+    },
+    {
+      "nodeId": "products-again",
+      "kind": "action",
+      "startLine": 115,
+      "endLine": 118
+    },
+    {
+      "nodeId": "parallel",
+      "kind": "action",
+      "startLine": 105,
+      "endLine": 120
+    },
+    {
+      "nodeId": "parallel-checks",
+      "kind": "step",
+      "startLine": 104,
+      "endLine": 120
+    },
+    {
+      "nodeId": "cleanup-check",
+      "kind": "action",
+      "startLine": 125,
+      "endLine": 126
+    },
+    {
+      "nodeId": "delete-user",
+      "kind": "action",
+      "startLine": 128,
+      "endLine": 131
+    },
+    {
+      "nodeId": "try-cleanup",
+      "kind": "action",
+      "startLine": 123,
+      "endLine": 132
+    },
+    {
+      "nodeId": "call-function",
+      "kind": "action",
+      "startLine": 133,
+      "endLine": 134
+    },
+    {
+      "nodeId": "cleanup-flow",
+      "kind": "step",
+      "startLine": 122,
+      "endLine": 134
+    }
+  ]
+}

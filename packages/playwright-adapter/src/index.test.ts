@@ -74,6 +74,7 @@ describe('executeManifest', () => {
           { id: 'switch', type: 'control.switch', value: 'ready', cases: { ready: [{ id: 'switch-ready', type: 'web.expectVisible', selector: '#ready' }] } },
           { id: 'for', type: 'control.for', variable: 'index', from: 0, to: 2, step: 1, children: [{ id: 'for-visible', type: 'web.expectVisible', selector: '#ready' }] },
           { id: 'while', type: 'control.while', condition: 'false', maxAttempts: 1, children: [{ id: 'while-never', type: 'web.expectVisible', selector: '#missing' }] },
+          { id: 'wait', type: 'control.waitUntil', condition: '${var:ready}', maxAttempts: 2, pollMs: 1, children: [{ id: 'wait-visible', type: 'web.expectVisible', selector: '#ready' }, { id: 'wait-set', type: 'control.set', variable: 'ready', value: 'true' }] },
           { id: 'timeout', type: 'control.timeout', timeoutMs: 5_000, children: [{ id: 'timeout-visible', type: 'web.expectVisible', selector: '#ready' }] },
           { id: 'call', type: 'control.call', functionName: 'verify-ready', arguments: {} },
         ],
@@ -82,7 +83,7 @@ describe('executeManifest', () => {
     try {
       const result = await executeManifest(complexManifest, { outputDir: '.testpilot/control-flow', screenshotMode: 'none' });
       expect(result.status).toBe('passed');
-      expect(result.steps[0]?.actions.map((action) => action.actionId)).toEqual(['open', 'api', 'api-branch', 'branch', 'loop', 'retry', 'finally', 'switch', 'for', 'while', 'timeout', 'call']);
+      expect(result.steps[0]?.actions.map((action) => action.actionId)).toEqual(['open', 'api', 'api-branch', 'branch', 'loop', 'retry', 'finally', 'switch', 'for', 'while', 'wait', 'timeout', 'call']);
       expect(result.steps[0]?.actions.every((action) => action.status === 'passed')).toBe(true);
       expect(result.artifacts.some((artifact) => artifact.type === 'trace')).toBe(true);
       expect(result.artifacts.some((artifact) => artifact.type === 'screenshot' && artifact.path.endsWith('control-finally.png'))).toBe(true);

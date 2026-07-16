@@ -351,7 +351,7 @@ export const manifestJsonSchema = {
         condition: { type: 'string' },
         items: {},
         variable: { type: 'string' },
-        maxAttempts: { type: 'integer', minimum: 1 },
+        maxAttempts: { type: 'integer', minimum: 1, maximum: 1000 },
         backoffMs: { type: 'integer', minimum: 0 },
         timeoutMs: { type: 'integer', minimum: 1 },
         pollMs: { type: 'integer', minimum: 1 },
@@ -422,6 +422,50 @@ export const manifestJsonSchema = {
         {
           if: { properties: { type: { const: 'control.timeout' } } },
           then: { required: ['timeoutMs', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.if' } } },
+          then: { required: ['condition', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.switch' } } },
+          then: { required: ['value', 'cases'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.for' } } },
+          then: { required: ['variable', 'from', 'to', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.forEach' } } },
+          then: { required: ['items', 'variable', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.while' } } },
+          then: { required: ['condition', 'maxAttempts', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.retry' } } },
+          then: { required: ['maxAttempts', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.try' } } },
+          then: { required: ['children'] },
+        },
+        {
+          if: { properties: { type: { enum: ['control.parallel', 'control.race'] } } },
+          then: { required: ['branches'], properties: { branches: { minItems: 1 } } },
+        },
+        {
+          if: { properties: { type: { const: 'control.waitUntil' } } },
+          then: { required: ['condition', 'maxAttempts', 'pollMs', 'children'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.set' } } },
+          then: { required: ['variable', 'value'] },
+        },
+        {
+          if: { properties: { type: { const: 'custom.action' } } },
+          then: { required: ['actionType'] },
         },
       ],
     },

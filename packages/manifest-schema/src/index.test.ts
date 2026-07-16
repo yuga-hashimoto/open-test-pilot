@@ -354,5 +354,17 @@ describe('Manifest Schema', () => {
       };
       expect(validator(complex)).toMatchObject({ valid: true, errors: null });
     });
+
+    it('requires bounded control-flow parameters instead of accepting incomplete nodes', () => {
+      const invalid = {
+        ...validManifest,
+        steps: [{ id: 'controls', actions: [
+          { id: 'while', type: 'control.while', condition: 'true', children: [] },
+          { id: 'retry', type: 'control.retry', maxAttempts: 1001, children: [] },
+          { id: 'parallel', type: 'control.parallel', branches: [] },
+        ] }],
+      };
+      expect(validator(invalid).valid).toBe(false);
+    });
   });
 });

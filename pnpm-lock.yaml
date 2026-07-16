@@ -75,6 +75,9 @@ importers:
       '@open-test-pilot/queue-adapter':
         specifier: workspace:*
         version: link:../../packages/queue-adapter
+      '@open-test-pilot/result-importer':
+        specifier: workspace:*
+        version: link:../../packages/result-importer
       '@open-test-pilot/runner-protocol':
         specifier: workspace:*
         version: link:../../packages/runner-protocol

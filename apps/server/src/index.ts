@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import cors from '@fastify/cors';
 import { buildGitHubAuthorizationUrl, createGitHubInstallationToken, exchangeGitHubOAuthCode, GitHubApiClient, verifyWebhookSignature } from '@open-test-pilot/github-adapter';
 import { createManifestValidator } from '@open-test-pilot/manifest-schema';
+import { importExternalResult } from '@open-test-pilot/result-importer';
 import { type RunnerCapabilities } from '@open-test-pilot/scheduler';
 import type { Job } from '@open-test-pilot/runner-protocol';
 import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
@@ -98,6 +99,9 @@ export interface TenantRepository {
   getRunResult(organizationId: string, runId: string): MaybePromise<StoredRunResult | undefined>;
   createArtifact(organizationId: string, input: Omit<ArtifactMetadata, 'id' | 'organizationId' | 'createdAt'>): MaybePromise<ArtifactMetadata>;
   listArtifacts(organizationId: string, runId: string): MaybePromise<ArtifactMetadata[]>;
+  listArtifactsBefore(organizationId: string, before: string): MaybePromise<ArtifactMetadata[]>;
+  deleteArtifact(organizationId: string, artifactId: string): MaybePromise<boolean>;
+  recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): MaybePromise<void>;
   getArtifact(organizationId: string, artifactId: string): MaybePromise<ArtifactMetadata | undefined>;
   createRepository(organizationId: string, input: { owner: string; name: string; provider?: string; installationId?: number }): MaybePromise<RepositoryRecord>;
   getRepository(organizationId: string, id: string): MaybePromise<RepositoryRecord | undefined>;
@@ -126,6 +130,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly manifests = new Map<string, unknown>();
   private readonly runResults = new Map<string, StoredRunResult>();
   private readonly artifacts = new Map<string, ArtifactMetadata>();
+  private readonly auditEvents: Array<{ organizationId: string; action: string; resourceType: string; resourceId?: string; metadata: Record<string, unknown> }> = [];
   private readonly repositories = new Map<string, RepositoryRecord>();
   private readonly schedules = new Map<string, ScheduleRecord>();
   private readonly changeRequests = new Map<string, ChangeRequestRecord>();
@@ -241,6 +246,12 @@ export class InMemoryTenantRepository implements TenantRepository {
 
   listArtifacts(organizationId: string, runId: string): ArtifactMetadata[] { return [...this.artifacts.values()].filter((artifact) => artifact.organizationId === organizationId && artifact.runId === runId); }
 
+  listArtifactsBefore(organizationId: string, before: string): ArtifactMetadata[] { const timestamp = Date.parse(before); return [...this.artifacts.values()].filter((artifact) => artifact.organizationId === organizationId && Date.parse(artifact.createdAt) < timestamp); }
+
+  deleteArtifact(organizationId: string, artifactId: string): boolean { const artifact = this.getArtifact(organizationId, artifactId); return artifact === undefined ? false : this.artifacts.delete(artifact.id); }
+
+  recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): void { this.auditEvents.push({ organizationId, action, resourceType, ...(resourceId === undefined ? {} : { resourceId }), metadata }); }
+
   getArtifact(organizationId: string, artifactId: string): ArtifactMetadata | undefined {
     const artifact = this.artifacts.get(artifactId);
     return artifact?.organizationId === organizationId ? artifact : undefined;
@@ -332,6 +343,8 @@ interface CreateJobBody { job: Job }
 interface RunnerParams { runnerId: string }
 interface JobParams { jobId: string }
 interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled'; result?: { failures?: unknown[]; steps?: unknown[]; [key: string]: unknown } }
+interface ImportResultBody { framework: 'unit' | 'component' | 'integration'; result: string | Record<string, unknown> }
+interface PurgeArtifactsBody { before?: string; dryRun?: boolean }
 interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
 export interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
@@ -628,6 +641,22 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ runId: run.id, failures: result?.failures ?? [] });
   });
 
+  app.post<{ Params: RunParams; Headers: TenantHeaders; Body: ImportResultBody }>('/v1/runs/:runId/results/import', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    const framework = request.body?.framework;
+    if (framework !== 'unit' && framework !== 'component' && framework !== 'integration') return reply.code(400).send({ error: 'framework must be unit, component, or integration' });
+    if (request.body?.result === undefined || request.body.result === null) return reply.code(400).send({ error: 'result is required' });
+    const imported = importExternalResult(request.body.result, run.id, framework);
+    const failures = imported.tests.filter((test) => test.status === 'failed').map((test) => ({ name: test.name, message: test.message, framework }));
+    await repository.saveRunResult(run.organizationId, run.id, { protocolVersion: '1.0.0', status: imported.status, importedFramework: framework, importedTests: imported.tests, failures, steps: [{ stepId: `imported:${framework}`, status: imported.status, actions: imported.tests }] });
+    await repository.updateRun(run.id, { status: imported.status, endedAt: new Date().toISOString() }, run.organizationId);
+    return reply.code(202).send({ runId: run.id, framework, status: imported.status, testCount: imported.tests.length, failureCount: failures.length });
+  });
+
   app.get<{ Params: StepParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
@@ -691,6 +720,21 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     return reply.send({ runId: run.id, artifacts: await repository.listArtifacts(run.organizationId, run.id) });
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: PurgeArtifactsBody }>('/v1/organizations/:organizationId/artifacts/purge', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const before = request.body?.before === undefined ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) : new Date(request.body.before);
+    if (Number.isNaN(before.getTime())) return reply.code(400).send({ error: 'before must be an ISO timestamp' });
+    const candidates = await repository.listArtifactsBefore(request.params.organizationId, before.toISOString());
+    const dryRun = request.body?.dryRun === true;
+    if (dryRun) return reply.send({ organizationId: request.params.organizationId, dryRun: true, before: before.toISOString(), count: candidates.length, bytes: candidates.reduce((sum, artifact) => sum + artifact.size, 0), artifactIds: candidates.map((artifact) => artifact.id) });
+    for (const artifact of candidates) {
+      await artifactStore.delete({ organizationId: artifact.organizationId, key: artifact.storageKey });
+      await repository.deleteArtifact(artifact.organizationId, artifact.id);
+      await repository.recordAuditEvent(artifact.organizationId, 'artifact.deleted', 'artifact', artifact.id, { storageKey: artifact.storageKey, reason: 'retention' });
+    }
+    return reply.send({ organizationId: request.params.organizationId, dryRun: false, before: before.toISOString(), count: candidates.length, bytes: candidates.reduce((sum, artifact) => sum + artifact.size, 0), artifactIds: candidates.map((artifact) => artifact.id) });
   });
 
   app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId', async (request, reply) => {
@@ -804,10 +848,12 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/runs/{runId}': { get: {} },
     '/v1/runs/{runId}/report': { get: {} },
     '/v1/runs/{runId}/failures': { get: {} },
+    '/v1/runs/{runId}/results/import': { post: {} },
     '/v1/runs/{runId}/steps/{stepId}': { get: {} },
     '/v1/runs/{runId}/compare/{baselineRunId}': { get: {} },
     '/v1/runs/{runId}/repair': { post: {} },
     '/v1/runs/{runId}/artifacts': { post: {}, get: {} },
+    '/v1/organizations/{organizationId}/artifacts/purge': { post: {} },
     '/v1/artifacts/{artifactId}': { get: {} },
     '/v1/artifacts/{artifactId}/metadata': { get: {} },
     '/v1/pull-requests': { post: {} },

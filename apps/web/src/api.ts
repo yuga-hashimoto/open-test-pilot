@@ -6,6 +6,7 @@ export interface ApiRun { id: string; projectId: string; testId: string; status:
 export interface ApiSchedule { id: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string; }
 export interface ApiFailure { message: string; category?: string; artifacts?: string[]; [key: string]: unknown; }
 export interface ApiArtifact { id: string; runId: string; key: string; contentType: string; size: number; storageKey: string; sha256: string; createdAt: string; }
+export interface ApiRunEvidence { failures: ApiFailure[]; artifacts: ApiArtifact[]; report: { runId: string; status: ApiRun['status']; reportUrl?: string }; }
 export interface ApiChangeRequest { id: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string; }
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 
@@ -25,6 +26,7 @@ export interface TestPilotApi {
   getRunFailures(runId: string): Promise<ApiFailure[]>;
   listArtifacts(runId: string): Promise<ApiArtifact[]>;
   getReport(runId: string): Promise<{ runId: string; status: ApiRun['status']; reportUrl?: string }>;
+  getRunEvidence(runId: string): Promise<ApiRunEvidence>;
 }
 
 export interface ApiConfig { baseUrl: string; organizationId: string; projectId?: string; testId?: string; sessionToken?: string; }
@@ -60,5 +62,6 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async getRunFailures(runId) { return (await request<{ failures: ApiFailure[] }>(`/v1/runs/${pathId(runId)}/failures`)).failures; },
     async listArtifacts(runId) { return (await request<{ artifacts: ApiArtifact[] }>(`/v1/runs/${pathId(runId)}/artifacts`)).artifacts; },
     async getReport(runId) { return await request<{ runId: string; status: ApiRun['status']; reportUrl?: string }>(`/v1/runs/${pathId(runId)}/report`); },
+    async getRunEvidence(runId) { const [failures, artifacts, report] = await Promise.all([this.getRunFailures(runId), this.listArtifacts(runId), this.getReport(runId)]); return { failures, artifacts, report }; },
   };
 }

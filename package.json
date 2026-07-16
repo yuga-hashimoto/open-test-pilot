@@ -9,7 +9,11 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "build": "pnpm -r build",
-    "testpilot": "tsx packages/cli/src/index.ts"
+    "testpilot": "tsx packages/cli/src/index.ts",
+    "verify:generated": "node scripts/verify-generated-snapshots.mjs",
+    "license:report": "node scripts/generate-license-report.mjs",
+    "security:audit": "pnpm audit --audit-level high",
+    "release:artifacts": "node scripts/build-release-artifacts.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

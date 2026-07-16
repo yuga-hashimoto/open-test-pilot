@@ -207,6 +207,27 @@ describe('OpenTestPilot server API', () => {
     await app.close();
   });
 
+  it('supports tenant-scoped artifact retention dry-runs and audited deletion', async () => {
+    const app = buildServer();
+    const organizationId = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Retention' } })).json<{ id: string }>().id;
+    const projectId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } })).json<{ id: string }>().id;
+    const testId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } })).json<{ id: string }>().id;
+    const runId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } })).json<{ runId: string }>().runId;
+    const uploaded = await app.inject({ method: 'POST', url: `/v1/runs/${runId}/artifacts`, headers: { 'x-organization-id': organizationId }, payload: { key: 'old.log', contentType: 'text/plain', bodyBase64: Buffer.from('old').toString('base64') } });
+    const artifactId = uploaded.json<{ id: string }>().id;
+    const before = new Date(Date.now() + 1_000).toISOString();
+    const dryRun = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/artifacts/purge`, headers: { 'x-organization-id': organizationId }, payload: { before, dryRun: true } });
+    expect(dryRun.statusCode).toBe(200);
+    expect(dryRun.json<{ count: number; dryRun: boolean }>().dryRun).toBe(true);
+    expect(dryRun.json<{ count: number }>().count).toBe(1);
+    expect((await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': organizationId } })).statusCode).toBe(200);
+    const purged = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/artifacts/purge`, headers: { 'x-organization-id': organizationId }, payload: { before } });
+    expect(purged.statusCode).toBe(200);
+    expect(purged.json<{ count: number }>().count).toBe(1);
+    expect((await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': organizationId } })).statusCode).toBe(404);
+    await app.close();
+  });
+
   it('moves a run through queued, running, and completed runner states', async () => {
     const app = buildServer();
     const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Lifecycle' } });
@@ -252,6 +273,21 @@ describe('OpenTestPilot server API', () => {
     const step = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/steps/login`, headers: { 'x-organization-id': organizationId } });
     expect(step.statusCode).toBe(200);
     expect(step.json<{ stepId: string }>().stepId).toBe('login');
+    await app.close();
+  });
+
+  it('imports unit, component, and integration results into a tenant run', async () => {
+    const app = buildServer();
+    const organizationId = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Imported results' } })).json<{ id: string }>().id;
+    const projectId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } })).json<{ id: string }>().id;
+    const testId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } })).json<{ id: string }>().id;
+    const runId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } })).json<{ runId: string }>().runId;
+    const imported = await app.inject({ method: 'POST', url: `/v1/runs/${runId}/results/import`, headers: { 'x-organization-id': organizationId }, payload: { framework: 'integration', result: { testResults: [{ name: 'checkout', status: 'failed', message: 'payment unavailable' }] } } });
+    expect(imported.statusCode).toBe(202);
+    expect(imported.json<{ status: string; failureCount: number }>().status).toBe('failed');
+    expect(imported.json<{ failureCount: number }>().failureCount).toBe(1);
+    const failures = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/failures`, headers: { 'x-organization-id': organizationId } });
+    expect(failures.json<{ failures: Array<{ name: string; framework: string }> }>().failures).toEqual([expect.objectContaining({ name: 'checkout', framework: 'integration' })]);
     await app.close();
   });
 

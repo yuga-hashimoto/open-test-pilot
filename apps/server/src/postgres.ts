@@ -203,6 +203,23 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
+  async listArtifactsBefore(organizationId: string, before: string): Promise<ArtifactMetadata[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }>('SELECT id, organization_id, run_id, storage_key, media_type, byte_size, sha256, created_at FROM artifacts WHERE organization_id = $1 AND created_at < $2 ORDER BY created_at, id', [organizationId, before]);
+      return result.rows.map((row) => artifactFromRow(row, row.storage_key.split('/').slice(2).join('/')));
+    });
+  }
+
+  async deleteArtifact(organizationId: string, artifactId: string): Promise<boolean> {
+    return this.tenantQuery(organizationId, async (client) => (await client.query('DELETE FROM artifacts WHERE organization_id = $1 AND id = $2', [organizationId, artifactId])).rowCount === 1);
+  }
+
+  async recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): Promise<void> {
+    await this.tenantQuery(organizationId, async (client) => {
+      await client.query('INSERT INTO audit_logs (organization_id, action, resource_type, resource_id, metadata) VALUES ($1, $2, $3, $4, $5::jsonb)', [organizationId, action, resourceType, resourceId ?? null, JSON.stringify(metadata)]);
+    });
+  }
+
   async getArtifact(organizationId: string, artifactId: string): Promise<ArtifactMetadata | undefined> {
     return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }>('SELECT id, organization_id, run_id, storage_key, media_type, byte_size, sha256, created_at FROM artifacts WHERE organization_id = $1 AND id = $2', [organizationId, artifactId]);

@@ -71,7 +71,7 @@ describe('generatePlaywright', () => {
     const output = generatePlaywright(controlManifest);
     expect(output.code).toContain('for (const item of');
     expect(output.code).toContain("vars['item'] = item;");
-    expect(output.code).toContain('if (truthy(');
+    expect(output.code).toContain('if (resolveCondition(');
     expect(output.sourceMap.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({ nodeId: 'loop', kind: 'action' }),
       expect.objectContaining({ nodeId: 'assert-item', kind: 'action' }),
@@ -111,6 +111,16 @@ describe('generatePlaywright', () => {
     expect(output.code).toContain('await callFunction');
   });
 
+  it('evaluates interpolated conditions instead of treating every non-empty expression as true', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      steps: [{ id: 'condition', actions: [{ id: 'branch', type: 'control.if', condition: '${steps.login.email} == test@example.com', children: [], elseChildren: [] }] }],
+    } as Manifest);
+    expect(output.code).toContain('const resolveCondition =');
+    expect(output.code).toContain("if (resolveCondition('${steps.login.email} == test@example.com'))");
+    expect(output.code).not.toContain("if (truthy(resolveValue('${steps.login.email} == test@example.com')))");
+  });
+
   it('generates executable API outputs, step interpolation, and custom action imports', () => {
     const output = generatePlaywright({
       ...manifest,
@@ -124,6 +134,27 @@ describe('generatePlaywright', () => {
     expect(output.code).toContain('response_create');
     expect(output.code).toContain("resolveValue('${steps.api.email}')");
     expect(output.code).toContain('customActions[type]');
+  });
+
+  it('passes call arguments into a scoped function and resolves manifest variables from vars', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      variables: [{ name: 'email' }],
+      functions: [{ id: 'set-email', parameters: ['value'], actions: [{ id: 'set', type: 'control.set', variable: 'email', value: '${var:value}' }] }],
+      steps: [{ id: 'step', actions: [{ id: 'call', type: 'control.call', functionName: 'set-email', arguments: { value: 'user@example.com' } }, { id: 'fill', type: 'web.fill', selector: '#email', value: '${var:email}' }] }],
+    } as Manifest);
+    expect(output.code).toContain('const previousVars = { ...vars };');
+    expect(output.code).toContain('resolveAny({"value":"user@example.com"})');
+    expect(output.code).toContain('vars[name] = value;');
+    expect(output.code).toContain("resolveValue('${var:email}')");
+  });
+
+  it('emits waitUntil children inside the bounded polling loop', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      steps: [{ id: 'wait', actions: [{ id: 'poll', type: 'control.waitUntil', condition: 'true', maxAttempts: 2, pollMs: 1, children: [{ id: 'check', type: 'web.expectVisible', selector: '#ready' }] }] }],
+    } as Manifest);
+    expect(output.code).toMatch(/for \(let waitAttempt[\s\S]*await expect\(page\.locator\('#ready'\)\)\.toBeVisible\(\);[\s\S]*\}/);
   });
 });
 

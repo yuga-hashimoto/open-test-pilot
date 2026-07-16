@@ -291,7 +291,12 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       await Promise.race((action.branches ?? []).map((branch) => executeActions(branch, manifest, page, request, timeoutMs, context, options)));
       return;
     case 'control.waitUntil':
-      for (let attempt = 1; attempt <= (action.maxAttempts ?? 30); attempt += 1) { if (conditionValue(action.condition ?? '', manifest, context)) return; await new Promise((resolve) => setTimeout(resolve, action.pollMs ?? 250)); }
+      for (let attempt = 1; attempt <= (action.maxAttempts ?? 30); attempt += 1) {
+        if (conditionValue(action.condition ?? '', manifest, context)) return;
+        await executeActions(action.children ?? [], manifest, page, request, timeoutMs, context, options);
+        if (conditionValue(action.condition ?? '', manifest, context)) return;
+        await new Promise((resolve) => setTimeout(resolve, action.pollMs ?? 250));
+      }
       throw new Error(`waitUntil condition was not met: ${action.condition ?? ''}`);
     case 'control.break': throw new ControlSignal('break');
     case 'control.continue': throw new ControlSignal('continue');
