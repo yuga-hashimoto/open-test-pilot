@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.postgres
     environment:
       POSTGRES_DB: opentestpilot
       POSTGRES_USER: opentestpilot
@@ -8,7 +10,6 @@ services:
     ports: ["5432:5432"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ../postgres/migrations:/docker-entrypoint-initdb.d:ro
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
