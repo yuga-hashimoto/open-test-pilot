@@ -37,5 +37,7 @@
 - [x] Live PostgreSQL container: organization/project/test/run CRUD and RLS-scoped reads.
 - [x] Live Redis container: register/enqueue/lease/complete.
 - [x] Live Fastify + PostgreSQL + Redis HTTP flow: create run, Runner lease, artifact upload, completion, passed run.
-- [ ] GitHub API write flow with real App installation credentials.
+- [x] GitHub API write flow with real App installation credentials (App ID `4314915`, installation `146977164`; branch/commit/draft PR/check/status/comment smoke completed and cleaned up).
 - [ ] Appium emulator/simulator flow with an available device.
+
+Appium remains an environment gate: this machine currently has no Android device in `adb devices`, no available iOS simulator runtime/device in `xcrun simctl list devices available`, and no `appium` executable. The adapter and generated WebdriverIO boundary are covered by unit tests, but no fake device success is claimed.

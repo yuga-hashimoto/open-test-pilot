@@ -17,7 +17,9 @@ const manifest: Manifest = {
   steps: [{
     id: 'home',
     actions: [
-      { id: 'goto', type: 'web.goto', url: 'http://127.0.0.1:4173/' },
+      // Keep this port distinct from the real fixture smoke test. The test
+      // intentionally verifies the structured connection-refused path.
+      { id: 'goto', type: 'web.goto', url: 'http://127.0.0.1:49999/' },
       { id: 'heading', type: 'web.expectText', selector: 'h1', expectedText: 'OpenTestPilot' },
     ],
   }],

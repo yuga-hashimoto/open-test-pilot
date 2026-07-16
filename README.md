@@ -16,10 +16,19 @@ pnpm testpilot manifest validate examples/manifests/login.yaml
 pnpm testpilot manifest generate examples/manifests/login.yaml
 ```
 
-The generated test is standard Playwright TypeScript under `examples/manifests/generated/`. A local run writes `.testpilot/runs/<run-id>/report.json`, `index.html`, generated code, screenshots, DOM, accessibility snapshots, and runner logs:
+Start the included fixture in a second terminal before running the example. It binds only to `127.0.0.1:4173`, so the flow does not depend on an unrelated application already using port 3000:
 
 ```bash
-pnpm testpilot run examples/manifests/login.yaml
+node examples/fixtures/web/server.mjs
+pnpm testpilot manifest validate examples/manifests/fixture-login.yaml
+pnpm testpilot manifest generate examples/manifests/fixture-login.yaml
+pnpm testpilot run examples/manifests/fixture-login.yaml
+```
+
+The generated test is standard Playwright TypeScript under `examples/manifests/generated/`. A local run writes `.testpilot/runs/<run-id>/report.json`, `index.html`, generated code, screenshots, DOM, accessibility snapshots, and runner logs. The command exits non-zero on a real browser failure and records the failure evidence:
+
+```bash
+pnpm testpilot run examples/manifests/fixture-login.yaml
 ```
 
 The full architecture and dependency-ordered implementation plan are in [`docs/MASTER_IMPLEMENTATION_PLAN.md`](docs/MASTER_IMPLEMENTATION_PLAN.md). The repository now includes the local vertical slice, a tenant-safe Fastify server with PostgreSQL/Redis/S3 selection, a live API-connected React dashboard, GitHub OAuth/App branch/PR/Checks adapters, distributed Runner execution and artifact upload, MCP bridge, Appium/WebdriverIO execution boundaries, source/API analyzers, trigger/notification SDKs, a policy-gated Claude Code Worker, and Helm/Compose release artifacts. External GitHub credentials, Docker execution, Claude CLI credentials, and physical mobile devices remain explicit environment gates.

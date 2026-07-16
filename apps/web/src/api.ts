@@ -2,10 +2,12 @@
 
 export interface ApiTest { id: string; projectId: string; name: string; manifestId: string; createdAt: string; }
 export interface ApiRun { id: string; projectId: string; testId: string; status: 'queued' | 'running' | 'passed' | 'failed'; createdAt: string; startedAt?: string; endedAt?: string; }
+export interface ApiSchedule { id: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string; }
 
 export interface TestPilotApi {
   listTests(): Promise<ApiTest[]>;
   listRuns(): Promise<ApiRun[]>;
+  listSchedules(): Promise<ApiSchedule[]>;
   startRun(projectId: string, testId: string): Promise<{ runId: string; status: ApiRun['status'] }>;
   getRun(runId: string): Promise<ApiRun>;
 }
@@ -29,6 +31,7 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
   return {
     async listTests() { return (await request<{ tests: ApiTest[] }>(`/v1/organizations/${config.organizationId}/tests`)).tests; },
     async listRuns() { return (await request<{ runs: ApiRun[] }>(`/v1/organizations/${config.organizationId}/runs`)).runs; },
+    async listSchedules() { return (await request<{ schedules: ApiSchedule[] }>(`/v1/organizations/${config.organizationId}/schedules`)).schedules; },
     async startRun(projectId, testId) { return await request<{ runId: string; status: ApiRun['status'] }>(`/v1/organizations/${config.organizationId}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, testId }) }); },
     async getRun(runId) { return await request<ApiRun>(`/v1/runs/${runId}`); },
   };

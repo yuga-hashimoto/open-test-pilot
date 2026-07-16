@@ -10,7 +10,7 @@ priority: high
 preconditions: []
 variables:
   - name: baseUrl
-    defaultValue: http://localhost:3000
+    defaultValue: http://127.0.0.1:4173
 secrets: []
 setup: []
 steps:
