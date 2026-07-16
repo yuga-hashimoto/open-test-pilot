@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 export interface ApiTest { id: string; projectId: string; name: string; manifestId: string; createdAt: string; }
 export interface ApiRun { id: string; projectId: string; testId: string; status: 'queued' | 'running' | 'passed' | 'failed'; createdAt: string; startedAt?: string; endedAt?: string; }
 

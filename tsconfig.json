@@ -42,6 +42,11 @@
     { "path": "packages/notification-adapter" },
     { "path": "packages/trigger-adapter" },
     { "path": "packages/queue-adapter" },
+    { "path": "packages/source-analyzer" },
+    { "path": "packages/api-adapter" },
+    { "path": "packages/failure-analysis" },
+    { "path": "packages/result-importer" },
+    { "path": "packages/authz" },
     { "path": "apps/ai-worker" },
     { "path": "apps/server" },
     { "path": "apps/runner" }

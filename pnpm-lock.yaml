@@ -104,11 +104,15 @@ importers:
         specifier: workspace:*
         version: link:../result-schema
 
+  packages/api-adapter: {}
+
   packages/appium-adapter:
     dependencies:
       webdriverio:
         specifier: ^9.29.1
         version: 9.29.1
+
+  packages/authz: {}
 
   packages/claude-code-plugin: {}
 
@@ -131,6 +135,8 @@ importers:
         version: link:../result-schema
 
   packages/custom-action-sdk: {}
+
+  packages/failure-analysis: {}
 
   packages/generator:
     dependencies:
@@ -211,6 +217,8 @@ importers:
         specifier: workspace:*
         version: link:../result-schema
 
+  packages/result-importer: {}
+
   packages/result-schema: {}
 
   packages/runner-protocol:
@@ -226,6 +234,12 @@ importers:
         version: link:../runner-protocol
 
   packages/secret-provider-sdk: {}
+
+  packages/source-analyzer:
+    dependencies:
+      '@open-test-pilot/agent-protocol':
+        specifier: workspace:*
+        version: link:../agent-protocol
 
   packages/storage-adapter:
     dependencies:
