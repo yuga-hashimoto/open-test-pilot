@@ -42,4 +42,11 @@ describe('GitHub adapter', () => {
     await client.createIssueComment('org', 'repo', 7, 'Repair proposal is ready.');
     expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual(expect.arrayContaining(['POST https://api.github.com/repos/org/repo/git/refs', 'PUT https://api.github.com/repos/org/repo/contents/tests/login.yaml', 'POST https://api.github.com/repos/org/repo/pulls', 'POST https://api.github.com/repos/org/repo/check-runs', 'POST https://api.github.com/repos/org/repo/statuses/commit-1', 'POST https://api.github.com/repos/org/repo/issues/7/comments']));
   });
+
+  it('lists repositories available to an App installation with pagination', async () => {
+    const requests: string[] = [];
+    const client = new GitHubApiClient('installation-token', async (input) => { requests.push(String(input)); const page = String(input).includes('page=2') ? { repositories: [{ id: 2, full_name: 'org/two', default_branch: 'main', private: true, owner: { login: 'org' }, name: 'two' }], total_count: 2 } : { repositories: [{ id: 1, full_name: 'org/one', default_branch: 'trunk', private: false, owner: { login: 'org' }, name: 'one' }], total_count: 2 }; return new Response(JSON.stringify(page), { status: 200 }); });
+    await expect(client.listInstallationRepositories()).resolves.toEqual([expect.objectContaining({ fullName: 'org/one' }), expect.objectContaining({ fullName: 'org/two' })]);
+    expect(requests).toHaveLength(2);
+  });
 });

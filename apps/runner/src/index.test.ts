@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createRunnerClient } from './index.js';
+import { createRunnerClient, runJobWithHeartbeat, type RunnerClient } from './index.js';
+import type { Job } from '@open-test-pilot/runner-protocol';
 
 describe('createRunnerClient', () => {
   it('does not send an empty JSON body for heartbeat', async () => {
@@ -13,5 +14,17 @@ describe('createRunnerClient', () => {
       expect.objectContaining({ method: 'POST', headers: { accept: 'application/json', 'x-organization-id': 'org-1' } }),
     );
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('body');
+  });
+
+  it('keeps a long-running lease alive and stops heartbeats after execution', async () => {
+    const heartbeat = vi.fn(async () => undefined);
+    const client = { heartbeat } as unknown as RunnerClient;
+    const job: Job = { jobId: 'job-heartbeat', runId: 'run-heartbeat', manifest: { schemaVersion: '1.0.0', id: 'smoke', name: 'Smoke' }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'leased', createdAt: new Date().toISOString() };
+    const result = await runJobWithHeartbeat(client, 'runner-1', job, 5, async () => { await new Promise((resolve) => setTimeout(resolve, 22)); return { exitCode: 0, stdout: '', stderr: '' }; });
+    expect(result.exitCode).toBe(0);
+    expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const countAfterExecution = heartbeat.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    expect(heartbeat.mock.calls.length).toBe(countAfterExecution);
   });
 });

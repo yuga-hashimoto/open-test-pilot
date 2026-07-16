@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
-import { buildGitHubAuthorizationUrl, exchangeGitHubOAuthCode } from '@open-test-pilot/github-adapter';
+import { buildGitHubAuthorizationUrl, createGitHubInstallationToken, exchangeGitHubOAuthCode, GitHubApiClient, verifyWebhookSignature } from '@open-test-pilot/github-adapter';
 import { type RunnerCapabilities } from '@open-test-pilot/scheduler';
 import type { Job } from '@open-test-pilot/runner-protocol';
 import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
-import { verifyWebhookSignature } from '@open-test-pilot/github-adapter';
 import { MemoryExecutionQueue, RedisExecutionQueue, type ExecutionQueue } from '@open-test-pilot/queue-adapter';
 import { LocalStorageAdapter, S3StorageAdapter, type StorageAdapter } from '@open-test-pilot/storage-adapter';
 import { PostgresTenantRepository } from './postgres.js';
@@ -53,6 +53,32 @@ export interface StoredRunResult {
   [key: string]: unknown;
 }
 
+export interface ArtifactMetadata {
+  id: string;
+  organizationId: string;
+  runId: string;
+  key: string;
+  contentType: string;
+  size: number;
+  storageKey: string;
+  sha256: string;
+  createdAt: string;
+}
+
+export interface RepositoryRecord {
+  id: string;
+  organizationId: string;
+  owner: string;
+  name: string;
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  provider: string;
+  githubRepositoryId?: number;
+  installationId?: number;
+  createdAt: string;
+}
+
 export interface TenantRepository {
   createOrganization(name: string): MaybePromise<Organization>;
   getOrganization(id: string): MaybePromise<Organization | undefined>;
@@ -69,6 +95,13 @@ export interface TenantRepository {
   updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, organizationId?: string): MaybePromise<RunRecord | undefined>;
   saveRunResult(organizationId: string, runId: string, result: StoredRunResult): MaybePromise<void>;
   getRunResult(organizationId: string, runId: string): MaybePromise<StoredRunResult | undefined>;
+  createArtifact(organizationId: string, input: Omit<ArtifactMetadata, 'id' | 'organizationId' | 'createdAt'>): MaybePromise<ArtifactMetadata>;
+  listArtifacts(organizationId: string, runId: string): MaybePromise<ArtifactMetadata[]>;
+  getArtifact(organizationId: string, artifactId: string): MaybePromise<ArtifactMetadata | undefined>;
+  createRepository(organizationId: string, input: { owner: string; name: string; provider?: string; installationId?: number }): MaybePromise<RepositoryRecord>;
+  getRepository(organizationId: string, id: string): MaybePromise<RepositoryRecord | undefined>;
+  listRepositories(organizationId: string): MaybePromise<RepositoryRecord[]>;
+  updateRepository(organizationId: string, id: string, patch: { fullName?: string; defaultBranch?: string; private?: boolean; githubRepositoryId?: number | null; installationId?: number | null }): MaybePromise<RepositoryRecord | undefined>;
 }
 
 export class InMemoryTenantRepository implements TenantRepository {
@@ -78,6 +111,8 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly runs = new Map<string, RunRecord>();
   private readonly manifests = new Map<string, unknown>();
   private readonly runResults = new Map<string, StoredRunResult>();
+  private readonly artifacts = new Map<string, ArtifactMetadata>();
+  private readonly repositories = new Map<string, RepositoryRecord>();
 
   createOrganization(name: string): Organization {
     const organization = { id: `org-${randomUUID()}`, name, createdAt: new Date().toISOString() };
@@ -144,6 +179,42 @@ export class InMemoryTenantRepository implements TenantRepository {
   saveRunResult(_organizationId: string, runId: string, result: StoredRunResult): void { this.runResults.set(runId, result); }
 
   getRunResult(_organizationId: string, runId: string): StoredRunResult | undefined { return this.runResults.get(runId); }
+
+  createArtifact(organizationId: string, input: Omit<ArtifactMetadata, 'id' | 'organizationId' | 'createdAt'>): ArtifactMetadata {
+    const artifact: ArtifactMetadata = { ...input, id: `artifact-${randomUUID()}`, organizationId, createdAt: new Date().toISOString() };
+    this.artifacts.set(artifact.id, artifact);
+    return artifact;
+  }
+
+  listArtifacts(organizationId: string, runId: string): ArtifactMetadata[] { return [...this.artifacts.values()].filter((artifact) => artifact.organizationId === organizationId && artifact.runId === runId); }
+
+  getArtifact(organizationId: string, artifactId: string): ArtifactMetadata | undefined {
+    const artifact = this.artifacts.get(artifactId);
+    return artifact?.organizationId === organizationId ? artifact : undefined;
+  }
+
+  createRepository(organizationId: string, input: { owner: string; name: string; provider?: string; installationId?: number }): RepositoryRecord {
+    const record: RepositoryRecord = { id: `repository-${randomUUID()}`, organizationId, owner: input.owner, name: input.name, fullName: `${input.owner}/${input.name}`, defaultBranch: 'main', private: false, provider: input.provider ?? 'github', ...(input.installationId === undefined ? {} : { installationId: input.installationId }), createdAt: new Date().toISOString() };
+    this.repositories.set(record.id, record);
+    return record;
+  }
+
+  getRepository(organizationId: string, id: string): RepositoryRecord | undefined {
+    const record = this.repositories.get(id);
+    return record?.organizationId === organizationId ? record : undefined;
+  }
+
+  listRepositories(organizationId: string): RepositoryRecord[] {
+    return [...this.repositories.values()].filter((record) => record.organizationId === organizationId);
+  }
+
+  updateRepository(organizationId: string, id: string, patch: { fullName?: string; defaultBranch?: string; private?: boolean; githubRepositoryId?: number | null; installationId?: number | null }): RepositoryRecord | undefined {
+    const record = this.repositories.get(id);
+    if (record === undefined || record.organizationId !== organizationId) return undefined;
+    const updated: RepositoryRecord = { ...record, ...('fullName' in patch ? { fullName: patch.fullName ?? record.fullName } : {}), ...('defaultBranch' in patch ? { defaultBranch: patch.defaultBranch ?? record.defaultBranch } : {}), ...('private' in patch ? { private: patch.private ?? record.private } : {}), ...('githubRepositoryId' in patch) ? (patch.githubRepositoryId === null ? {} : { githubRepositoryId: patch.githubRepositoryId }) : {}, ...('installationId' in patch) ? (patch.installationId === null ? {} : { installationId: patch.installationId }) : {} };
+    this.repositories.set(updated.id, updated);
+    return updated;
+  }
 }
 
 interface OrganizationParams { organizationId: string }
@@ -165,16 +236,25 @@ interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled'; result?: 
 interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
 interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
-interface ArtifactRecord { id: string; organizationId: string; runId: string; key: string; contentType: string; size: number; createdAt: string }
-interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: string }
-interface RepositoryRecord { id: string; organizationId: string; owner: string; name: string; provider: string; installationId?: string; createdAt: string }
+interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: number }
 interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
 interface CreateChangeRequestBody { title: string; description?: string }
 interface RepairRecord { id: string; organizationId: string; runId: string; reason: string; status: 'queued'; createdAt: string }
 interface PullRequestRecord { id: string; organizationId: string; url: string; createdAt: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
-  return request.headers['x-organization-id'];
+  const value = request.headers['x-organization-id'];
+  if (value === undefined) return undefined;
+  // PostgreSQL RLS casts app.organization_id to uuid. Reject malformed
+  // tenant headers before they reach the repository so they cannot become
+  // database errors or bypass the normal authorization response.
+  return /^org-[A-Za-z0-9-]+$/.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value) ? value : undefined;
+}
+
+function parseInstallationId(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function requireTenant(request: FastifyRequest<{ Headers: TenantHeaders }>, reply: FastifyReply, organizationId: string): boolean {
@@ -201,8 +281,6 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const app = Fastify({ logger: false });
   const oauthStates = new Set<string>();
   const schedules = new Map<string, ScheduleRecord>();
-  const artifacts = new Map<string, ArtifactRecord>();
-  const repositories = new Map<string, RepositoryRecord>();
   const changeRequests = new Map<string, ChangeRequestRecord>();
   const repairs = new Map<string, RepairRecord>();
   const pullRequests = new Map<string, PullRequestRecord>();
@@ -273,16 +351,41 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     const body = request.body;
     if (typeof body?.owner !== 'string' || typeof body.name !== 'string' || body.owner.trim() === '' || body.name.trim() === '') return reply.code(400).send({ error: 'owner and name are required' });
-    const repository: RepositoryRecord = { id: `repository-${randomUUID()}`, organizationId: request.params.organizationId, owner: body.owner.trim(), name: body.name.trim(), provider: body.provider ?? 'github', ...(body.installationId === undefined ? {} : { installationId: body.installationId }), createdAt: new Date().toISOString() };
-    repositories.set(repository.id, repository);
-    return reply.code(201).send(repository);
+    return reply.code(201).send(await repository.createRepository(request.params.organizationId, { owner: body.owner.trim(), name: body.name.trim(), ...(body.provider === undefined ? {} : { provider: body.provider }), ...(body.installationId === undefined ? {} : { installationId: body.installationId }) }));
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/repositories', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ repositories: await repository.listRepositories(request.params.organizationId) });
   });
 
   app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders }>('/v1/repositories/:repositoryId', async (request, reply) => {
-    const record = repositories.get(request.params.repositoryId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    return record === undefined ? reply.code(404).send({ error: 'repository not found' }) : reply.send(record);
+  });
+
+  app.post<{ Params: { repositoryId: string }; Headers: TenantHeaders }>('/v1/repositories/:repositoryId/sync', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
     if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
-    if (!requireTenant(request, reply, record.organizationId)) return reply;
-    return reply.send(record);
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support GitHub sync' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App sync is not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const github = new GitHubApiClient(installationToken.token);
+      const metadata = await github.getRepository(record.owner, record.name);
+      const updated = await repository.updateRepository(organizationId, record.id, { fullName: metadata.fullName, defaultBranch: metadata.defaultBranch, private: metadata.private, githubRepositoryId: metadata.id, installationId });
+      return updated === undefined ? reply.code(404).send({ error: 'repository not found' }) : reply.send(updated);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.get<{ Params: ResourceParams; Headers: TenantHeaders }>('/v1/tests/:id', async (request, reply) => {
@@ -447,9 +550,9 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (typeof body?.key !== 'string' || typeof body.contentType !== 'string' || typeof body.bodyBase64 !== 'string') return reply.code(400).send({ error: 'key, contentType, and bodyBase64 are required' });
     let bytes: Buffer;
     try { bytes = Buffer.from(body.bodyBase64, 'base64'); } catch { return reply.code(400).send({ error: 'bodyBase64 is invalid' }); }
-    const record = { id: `artifact-${randomUUID()}`, organizationId: run.organizationId, runId: run.id, key: body.key, contentType: body.contentType, size: bytes.byteLength, createdAt: new Date().toISOString() };
-    await artifactStore.put({ organizationId: run.organizationId, key: `${run.id}/${record.id}/${body.key}`, body: bytes, contentType: body.contentType });
-    artifacts.set(record.id, record);
+    const storageKey = `${run.id}/${randomUUID()}/${body.key}`;
+    await artifactStore.put({ organizationId: run.organizationId, key: storageKey, body: bytes, contentType: body.contentType });
+    const record = await repository.createArtifact(run.organizationId, { runId: run.id, key: body.key, contentType: body.contentType, size: bytes.byteLength, storageKey, sha256: createHash('sha256').update(bytes).digest('hex') });
     return reply.code(201).send(record);
   });
 
@@ -459,20 +562,24 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
-    return reply.send({ runId: run.id, artifacts: [...artifacts.values()].filter((artifact) => artifact.runId === run.id && artifact.organizationId === run.organizationId) });
+    return reply.send({ runId: run.id, artifacts: await repository.listArtifacts(run.organizationId, run.id) });
   });
 
   app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId', async (request, reply) => {
-    const record = artifacts.get(request.params.artifactId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getArtifact(organizationId, request.params.artifactId);
     if (record === undefined) return reply.code(404).send({ error: 'artifact not found' });
     if (!requireTenant(request, reply, record.organizationId)) return reply;
-    const bytes = await artifactStore.get({ organizationId: record.organizationId, key: `${record.runId}/${record.id}/${record.key}` });
+    const bytes = await artifactStore.get({ organizationId: record.organizationId, key: record.storageKey });
     if (bytes === undefined) return reply.code(404).send({ error: 'artifact body not found' });
     return reply.type(record.contentType).send(bytes);
   });
 
   app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId/metadata', async (request, reply) => {
-    const record = artifacts.get(request.params.artifactId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getArtifact(organizationId, request.params.artifactId);
     if (record === undefined) return reply.code(404).send({ error: 'artifact not found' });
     if (!requireTenant(request, reply, record.organizationId)) return reply;
     return reply.send(record);
@@ -557,8 +664,9 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations': { post: {} },
     '/v1/organizations/{organizationId}': { get: {} },
     '/v1/organizations/{organizationId}/projects': { post: {} },
-    '/v1/organizations/{organizationId}/repositories': { post: {} },
+    '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
     '/v1/repositories/{repositoryId}': { get: {} },
+    '/v1/repositories/{repositoryId}/sync': { post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },
     '/v1/tests/{id}/manifest': { get: {}, put: {} },

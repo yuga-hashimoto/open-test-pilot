@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import type { Organization, Project, RunRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { ArtifactMetadata, Organization, Project, RepositoryRecord, RunRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -157,6 +157,75 @@ export class PostgresTenantRepository implements TenantRepository {
       return { ...(row.metadata as Record<string, unknown>), steps: steps.rows.map((step) => step.result) as unknown[], failures: Array.isArray((row.metadata as { failures?: unknown }).failures) ? (row.metadata as { failures: unknown[] }).failures : [] };
     });
   }
+
+  async createArtifact(organizationId: string, input: Omit<ArtifactMetadata, 'id' | 'organizationId' | 'createdAt'>): Promise<ArtifactMetadata> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }>('INSERT INTO artifacts (organization_id, run_id, storage_key, media_type, byte_size, sha256) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, organization_id, run_id, storage_key, media_type, byte_size, sha256, created_at', [organizationId, input.runId, input.storageKey, input.contentType, input.size, input.sha256]);
+      return artifactFromRow(requiredRow(result.rows[0]), input.key);
+    });
+  }
+
+  async listArtifacts(organizationId: string, runId: string): Promise<ArtifactMetadata[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }>('SELECT id, organization_id, run_id, storage_key, media_type, byte_size, sha256, created_at FROM artifacts WHERE organization_id = $1 AND run_id = $2 ORDER BY created_at, id', [organizationId, runId]);
+      return result.rows.map((row) => artifactFromRow(row, row.storage_key.split('/').slice(2).join('/')));
+    });
+  }
+
+  async getArtifact(organizationId: string, artifactId: string): Promise<ArtifactMetadata | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }>('SELECT id, organization_id, run_id, storage_key, media_type, byte_size, sha256, created_at FROM artifacts WHERE organization_id = $1 AND id = $2', [organizationId, artifactId]);
+      const row = result.rows[0];
+      return row === undefined ? undefined : artifactFromRow(row, row.storage_key.split('/').slice(2).join('/'));
+    });
+  }
+
+  async createRepository(organizationId: string, input: { owner: string; name: string; provider?: string; installationId?: number }): Promise<RepositoryRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<RepositoryRow>(
+        "INSERT INTO repositories (organization_id, full_name, \"owner\", name, default_branch, provider, installation_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, organization_id, full_name, \"owner\", name, default_branch, private, provider, github_repository_id, installation_id, created_at",
+        [organizationId, `${input.owner}/${input.name}`, input.owner, input.name, 'main', input.provider ?? 'github', input.installationId ?? null],
+      );
+      return repositoryFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async getRepository(organizationId: string, id: string): Promise<RepositoryRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<RepositoryRow>(
+        "SELECT id, organization_id, full_name, \"owner\", name, default_branch, private, provider, github_repository_id, installation_id, created_at FROM repositories WHERE organization_id = $1 AND id = $2",
+        [organizationId, id],
+      );
+      return result.rows[0] === undefined ? undefined : repositoryFromRow(result.rows[0]);
+    });
+  }
+
+  async listRepositories(organizationId: string): Promise<RepositoryRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<RepositoryRow>(
+        "SELECT id, organization_id, full_name, \"owner\", name, default_branch, private, provider, github_repository_id, installation_id, created_at FROM repositories WHERE organization_id = $1 ORDER BY created_at DESC",
+        [organizationId],
+      );
+      return result.rows.map(repositoryFromRow);
+    });
+  }
+
+  async updateRepository(organizationId: string, id: string, patch: { fullName?: string; defaultBranch?: string; private?: boolean; githubRepositoryId?: number | null; installationId?: number | null }): Promise<RepositoryRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<RepositoryRow>(
+        `UPDATE repositories SET
+          full_name = COALESCE($3, full_name),
+          default_branch = COALESCE($4, default_branch),
+          private = COALESCE($5, private),
+          github_repository_id = COALESCE($6, github_repository_id),
+          installation_id = COALESCE($7, installation_id)
+        WHERE id = $1 AND organization_id = $2
+        RETURNING id, organization_id, full_name, "owner", name, default_branch, private, provider, github_repository_id, installation_id, created_at`,
+        [id, organizationId, patch.fullName ?? null, patch.defaultBranch ?? null, patch.private ?? null, patch.githubRepositoryId ?? null, patch.installationId ?? null],
+      );
+      return result.rows[0] === undefined ? undefined : repositoryFromRow(result.rows[0]);
+    });
+  }
 }
 
 function dateValue(value: Date | string): string { return value instanceof Date ? value.toISOString() : value; }
@@ -166,3 +235,22 @@ function organizationFromRow(row: { id: string; name: string; created_at: Date }
 function projectFromRow(row: { id: string; organization_id: string; name: string; created_at: Date }): Project { return { id: row.id, organizationId: row.organization_id, name: row.name, createdAt: dateValue(row.created_at) }; }
 function testFromRow(row: { id: string; organization_id: string; project_id: string; name: string; manifest_id: string; created_at: Date }): TestRecord { return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, name: row.name, manifestId: row.manifest_id, createdAt: dateValue(row.created_at) }; }
 function runFromRow(row: { id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }): RunRecord { return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, testId: row.test_id, status: row.status, createdAt: dateValue(row.created_at), ...(row.started_at === null ? {} : { startedAt: dateValue(row.started_at) }), ...(row.ended_at === null ? {} : { endedAt: dateValue(row.ended_at) }) }; }
+function artifactFromRow(row: { id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }, key: string): ArtifactMetadata { return { id: row.id, organizationId: row.organization_id, runId: row.run_id, key, contentType: row.media_type, size: Number(row.byte_size), storageKey: row.storage_key, sha256: row.sha256, createdAt: dateValue(row.created_at) }; }
+
+interface RepositoryRow { id: string; organization_id: string; full_name: string; owner: string; name: string; default_branch: string; private: boolean; provider: string; github_repository_id: string | null; installation_id: string | null; created_at: Date; }
+
+function repositoryFromRow(row: RepositoryRow): RepositoryRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    owner: row.owner,
+    name: row.name,
+    fullName: row.full_name,
+    defaultBranch: row.default_branch,
+    private: row.private,
+    provider: row.provider,
+    ...(row.github_repository_id === null ? {} : { githubRepositoryId: Number(row.github_repository_id) }),
+    ...(row.installation_id === null ? {} : { installationId: Number(row.installation_id) }),
+    createdAt: dateValue(row.created_at),
+  };
+}

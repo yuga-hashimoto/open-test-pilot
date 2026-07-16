@@ -1,5 +1,5 @@
 import type { Capabilities, Job } from '@open-test-pilot/runner-protocol';
-import { executeInDocker, type DockerExecutorOptions } from './executor.js';
+import { executeInDocker, type DockerExecutorOptions, type ExecutionResult } from './executor.js';
 import { executeJobPayload } from './job-executor.js';
 
 export interface RunnerClient {
@@ -47,7 +47,17 @@ export interface RunnerLoopOptions {
   capabilities: Capabilities;
   pollIntervalMs?: number;
   docker: DockerExecutorOptions;
+  heartbeatIntervalMs?: number;
   once?: boolean;
+}
+
+export async function runJobWithHeartbeat(client: RunnerClient, runnerId: string, job: Job, heartbeatIntervalMs: number, execute: (job: Job) => Promise<ExecutionResult>): Promise<ExecutionResult> {
+  const timer = setInterval(() => { void client.heartbeat(runnerId).catch(() => undefined); }, Math.max(1, heartbeatIntervalMs));
+  try {
+    return await execute(job);
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 export async function runRunnerLoop(client: RunnerClient, options: RunnerLoopOptions): Promise<void> {
@@ -56,7 +66,7 @@ export async function runRunnerLoop(client: RunnerClient, options: RunnerLoopOpt
     await client.heartbeat(registration.runnerId);
     const job = await client.lease(registration.runnerId);
     if (job !== undefined) {
-      const result = await executeInDocker(job, options.docker);
+      const result = await runJobWithHeartbeat(client, registration.runnerId, job, options.heartbeatIntervalMs ?? 10_000, (leasedJob) => executeInDocker(leasedJob, options.docker));
       await client.uploadArtifact(job.runId, { key: 'runner/stdout.log', contentType: 'text/plain', body: Buffer.from(result.stdout) });
       await client.uploadArtifact(job.runId, { key: 'runner/stderr.log', contentType: 'text/plain', body: Buffer.from(result.stderr) });
       for (const artifact of result.artifacts ?? []) await client.uploadArtifact(job.runId, { key: artifact.key, contentType: artifact.contentType, body: Buffer.from(artifact.bodyBase64, 'base64') });

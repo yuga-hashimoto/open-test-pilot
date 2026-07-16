@@ -26,4 +26,14 @@ describe('execution queue', () => {
     expect(await queue.lease('org-2', orgTwoRunner.runnerId)).toBeUndefined();
     expect(await queue.lease('org-1', orgOneRunner.runnerId)).toMatchObject({ organizationId: 'org-1', status: 'leased' });
   });
+
+  it('reassigns an abandoned memory lease after its expiry', async () => {
+    const queue = new MemoryExecutionQueue(1);
+    const first = await queue.registerRunner('org-1', 'first', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+    const second = await queue.registerRunner('org-1', 'second', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+    expect(await queue.enqueue('org-1', job('org-1'))).toBe(true);
+    expect(await queue.lease('org-1', first.runnerId)).toMatchObject({ status: 'leased' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await queue.lease('org-1', second.runnerId)).toMatchObject({ jobId: 'job-1', status: 'leased' });
+  });
 });

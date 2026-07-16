@@ -77,6 +77,8 @@ export interface GitHubRepository {
   private: boolean;
 }
 
+export interface GitHubInstallationRepository extends GitHubRepository { owner: string; name: string; }
+
 export interface GitHubCheckRunInput { name: string; headSha: string; status: 'queued' | 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral'; title?: string; summary?: string; }
 export interface GitHubCheckRun { id: number; htmlUrl?: string; }
 export interface GitHubPullRequestInput { title: string; head: string; base: string; body?: string; draft?: boolean; }
@@ -99,6 +101,19 @@ export class GitHubApiClient {
       throw new Error(`GitHub repository lookup failed: ${body.message ?? 'incomplete response'}`);
     }
     return { id: body.id, fullName: body.full_name, defaultBranch: body.default_branch, private: body.private };
+  }
+
+  public async listInstallationRepositories(): Promise<GitHubInstallationRepository[]> {
+    const repositories: GitHubInstallationRepository[] = [];
+    let page = 1;
+    while (true) {
+      const body = await this.request<{ repositories?: Array<{ id?: number; full_name?: string; default_branch?: string; private?: boolean; owner?: { login?: string }; name?: string }>; total_count?: number }>(`https://api.github.com/installation/repositories?per_page=100&page=${page}`, { method: 'GET' });
+      const pageItems = (body.repositories ?? []).filter((item): item is { id: number; full_name: string; default_branch: string; private: boolean; owner: { login: string }; name: string } => item.id !== undefined && item.full_name !== undefined && item.default_branch !== undefined && item.private !== undefined && item.owner?.login !== undefined && item.name !== undefined).map((item) => ({ id: item.id, fullName: item.full_name, defaultBranch: item.default_branch, private: item.private, owner: item.owner.login, name: item.name }));
+      repositories.push(...pageItems);
+      if (pageItems.length === 0 || repositories.length >= (body.total_count ?? repositories.length)) return repositories;
+      if (body.total_count === undefined && pageItems.length < 100) return repositories;
+      page += 1;
+    }
   }
 
   public async createBranch(owner: string, repository: string, branch: string, baseSha: string): Promise<void> {

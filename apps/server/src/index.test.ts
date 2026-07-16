@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { buildServer } from './index.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { buildServer, InMemoryTenantRepository } from './index.js';
 
 describe('OpenTestPilot server API', () => {
   it('creates an organization and denies a cross-organization read', async () => {
@@ -170,6 +174,8 @@ describe('OpenTestPilot server API', () => {
     const body = await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': organizationId } });
     expect(body.statusCode).toBe(200);
     expect(body.body).toBe('hello');
+    const malformedTenant = await app.inject({ method: 'GET', url: `/v1/artifacts/${artifactId}`, headers: { 'x-organization-id': 'not-a-tenant' } });
+    expect(malformedTenant.statusCode).toBe(401);
     await app.close();
   });
 
@@ -242,6 +248,98 @@ describe('OpenTestPilot server API', () => {
     const runId = run.json<{ runId: string }>().runId;
     expect((await app.inject({ method: 'POST', url: `/v1/runs/${runId}/repair`, headers: { 'x-organization-id': organizationId }, payload: { reason: 'flaky selector' } })).statusCode).toBe(201);
     expect((await app.inject({ method: 'POST', url: '/v1/pull-requests', headers: { 'x-organization-id': organizationId }, payload: { url: 'https://github.com/openai/open-test-pilot/pull/1' } })).statusCode).toBe(201);
+    await app.close();
+  });
+});
+
+describe('repository persistence and sync', () => {
+  it('creates, lists, and reads tenant-scoped repositories', async () => {
+    const app = buildServer();
+    const orgA = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Org A' } })).json<{ id: string }>().id;
+    const orgB = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Org B' } })).json<{ id: string }>().id;
+
+    const repoA = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/repositories`, headers: { 'x-organization-id': orgA }, payload: { owner: 'owner-a', name: 'repo-a', provider: 'github' } })).json<{ id: string; fullName: string; defaultBranch: string }>();
+    expect(repoA.fullName).toBe('owner-a/repo-a');
+    expect(repoA.defaultBranch).toBe('main');
+
+    const repoB = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/repositories`, headers: { 'x-organization-id': orgA }, payload: { owner: 'owner-b', name: 'repo-b', installationId: 123 } })).json<{ id: string; installationId: number }>();
+    expect(repoB.installationId).toBe(123);
+
+    const listA = (await app.inject({ method: 'GET', url: `/v1/organizations/${orgA}/repositories`, headers: { 'x-organization-id': orgA } })).json<{ repositories: Array<{ id: string }> }>();
+    expect(listA.repositories).toHaveLength(2);
+
+    const listB = (await app.inject({ method: 'GET', url: `/v1/organizations/${orgB}/repositories`, headers: { 'x-organization-id': orgB } })).json<{ repositories: Array<{ id: string }> }>();
+    expect(listB.repositories).toHaveLength(0);
+
+    const denied = await app.inject({ method: 'GET', url: `/v1/repositories/${repoA.id}`, headers: { 'x-organization-id': orgB } });
+    expect(denied.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('rejects repository access without a tenant header', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Tenant' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'org', name: 'repo' } })).json<{ id: string }>();
+    expect((await app.inject({ method: 'GET', url: `/v1/repositories/${repo.id}` })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: `/v1/organizations/${org}/repositories` })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it('syncs a repository from GitHub App installation credentials', async () => {
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const keyPath = join(tmpdir(), `testpilot-repo-sync-${Date.now()}.pem`);
+    await writeFile(keyPath, privateKeyPem);
+
+    process.env['GITHUB_APP_ID'] = '67890';
+    process.env['GITHUB_PRIVATE_KEY_PATH'] = keyPath;
+    process.env['GITHUB_INSTALLATION_ID'] = '456';
+
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Sync Org' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'syncowner', name: 'syncrepo' } })).json<{ id: string; organizationId: string; private: boolean }>();
+    expect(repo.private).toBe(false);
+
+    const capturedUrls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: unknown, init?: unknown) => {
+      const url = String(input);
+      capturedUrls.push(url);
+      const isTokenExchange = url.includes('access_tokens');
+      const body = isTokenExchange
+        ? { token: 'ghs_test123', expires_at: '2026-12-31T23:59:59Z' }
+        : { id: 42, full_name: 'syncowner/syncrepo', default_branch: 'trunk', private: true };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
+    });
+
+    try {
+      const synced = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/sync`, headers: { 'x-organization-id': org } });
+      expect(synced.statusCode).toBe(200);
+      const body = synced.json<{ githubRepositoryId: number; fullName: string; defaultBranch: string; private: boolean; installationId: number }>();
+      expect(body.githubRepositoryId).toBe(42);
+      expect(body.fullName).toBe('syncowner/syncrepo');
+      expect(body.defaultBranch).toBe('trunk');
+      expect(body.private).toBe(true);
+      expect(body.installationId).toBe(456);
+      expect(capturedUrls.filter((u) => u.includes('access_tokens'))).toHaveLength(1);
+      expect(capturedUrls.filter((u) => u.includes('/repos/syncowner/syncrepo') && !u.includes('git/refs') && !u.includes('contents') && !u.includes('pulls') && !u.includes('check-runs') && !u.includes('statuses') && !u.includes('comments'))).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await unlink(keyPath).catch(() => undefined);
+      delete process.env['GITHUB_APP_ID'];
+      delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+      delete process.env['GITHUB_INSTALLATION_ID'];
+      await app.close();
+    }
+  });
+
+  it('returns 503 from sync when GitHub App is not configured', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'NoApp' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'o', name: 'r' } })).json<{ id: string }>();
+    const result = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/sync`, headers: { 'x-organization-id': org } });
+    expect(result.statusCode).toBe(503);
     await app.close();
   });
 });

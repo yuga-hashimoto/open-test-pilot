@@ -1,6 +1,6 @@
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 export interface PutArtifactInput {
   organizationId: string;
@@ -9,10 +9,16 @@ export interface PutArtifactInput {
   contentType: string;
 }
 
+export interface ArtifactRetentionInput {
+  organizationId: string;
+  before: Date;
+}
+
 export interface StorageAdapter {
   put(input: PutArtifactInput): Promise<void>;
   get(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<Buffer | undefined>;
   delete(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<void>;
+  purgeExpired(input: ArtifactRetentionInput): Promise<number>;
 }
 
 export class LocalStorageAdapter implements StorageAdapter {
@@ -43,6 +49,34 @@ export class LocalStorageAdapter implements StorageAdapter {
     }
   }
 
+  public async purgeExpired(input: ArtifactRetentionInput): Promise<number> {
+    const organizationDir = resolve(this.rootDir, input.organizationId);
+    let removed = 0;
+    await this.walkFiles(organizationDir, async (path) => {
+      const details = await stat(path);
+      if (details.mtime < input.before) {
+        await unlink(path);
+        removed += 1;
+      }
+    });
+    return removed;
+  }
+
+  private async walkFiles(directory: string, visit: (path: string) => Promise<void>): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await this.walkFiles(path, visit);
+      else if (entry.isFile()) await visit(path);
+    }
+  }
+
   private safePath(organizationId: string, key: string): string {
     const base = resolve(this.rootDir, organizationId);
     const path = resolve(base, key);
@@ -63,6 +97,22 @@ export class S3StorageAdapter implements StorageAdapter {
   async put(input: PutArtifactInput): Promise<void> { await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key), Body: input.body, ContentType: input.contentType })); }
   async get(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<Buffer | undefined> { try { const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key) })); if (result.Body === undefined) return undefined; return Buffer.from(await result.Body.transformToByteArray()); } catch (error) { if (error instanceof Error && 'name' in error && error.name === 'NoSuchKey') return undefined; throw error; } }
   async delete(input: Pick<PutArtifactInput, 'organizationId' | 'key'>): Promise<void> { await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: scopedKey(input.organizationId, input.key) })); }
+  async purgeExpired(input: ArtifactRetentionInput): Promise<number> {
+    const prefix = `${scopedOrganization(input.organizationId)}/`;
+    let continuationToken: string | undefined;
+    let removed = 0;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ...(continuationToken === undefined ? {} : { ContinuationToken: continuationToken }) }));
+      const keys = (page.Contents ?? []).filter((object) => object.Key !== undefined && object.LastModified !== undefined && object.LastModified < input.before).map((object) => ({ Key: object.Key }));
+      if (keys.length > 0) {
+        await this.client.send(new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects: keys, Quiet: true } }));
+        removed += keys.length;
+      }
+      continuationToken = page.IsTruncated === true ? page.NextContinuationToken : undefined;
+    } while (continuationToken !== undefined);
+    return removed;
+  }
 }
 
-function scopedKey(organizationId: string, key: string): string { if (organizationId.includes('/') || key.startsWith('/') || key.split('/').includes('..')) throw new Error('Storage key escapes organization boundary'); return `${organizationId}/${key}`; }
+function scopedOrganization(organizationId: string): string { if (organizationId.includes('/') || organizationId === '' || organizationId === '.' || organizationId === '..') throw new Error('Storage key escapes organization boundary'); return organizationId; }
+function scopedKey(organizationId: string, key: string): string { if (key.startsWith('/') || key.split('/').includes('..')) throw new Error('Storage key escapes organization boundary'); return `${scopedOrganization(organizationId)}/${key}`; }
