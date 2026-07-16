@@ -15,21 +15,30 @@ export interface ExecutionQueue {
 }
 
 export class MemoryExecutionQueue implements ExecutionQueue {
-  private readonly scheduler: Scheduler;
+  private readonly schedulers = new Map<string, Scheduler>();
   private readonly runners = new Map<string, RegisteredRunner>();
   private readonly organizations = new Map<string, string>();
   private readonly jobs = new Map<string, Job>();
-  constructor(leaseDurationMs = 60_000) { this.scheduler = new Scheduler({ leaseDurationMs }); }
+  constructor(private readonly leaseDurationMs = 60_000) {}
   async registerRunner(organizationId: string, name: string, capabilities: Capabilities): Promise<RegisteredRunner> {
     const runnerId = `runner-${randomUUID()}`;
     const runner = { runnerId, organizationId, name, capabilities: { ...capabilities, runnerId }, heartbeatAt: new Date().toISOString() };
     this.runners.set(runnerId, runner); this.organizations.set(runnerId, organizationId); return runner;
   }
   async heartbeat(organizationId: string, runnerId: string): Promise<boolean> { const runner = this.runners.get(runnerId); if (runner?.organizationId !== organizationId) return false; runner.heartbeatAt = new Date().toISOString(); return true; }
-  async enqueue(organizationId: string, job: Job): Promise<boolean> { const accepted = job.organizationId === organizationId && this.scheduler.enqueue(job); if (accepted) this.jobs.set(job.jobId, job); return accepted; }
-  async lease(organizationId: string, runnerId: string): Promise<Job | undefined> { const runner = this.runners.get(runnerId); if (runner?.organizationId !== organizationId) return undefined; return this.scheduler.leaseNext(runner.capabilities); }
-  async getJob(jobId: string): Promise<Job | undefined> { return this.scheduler.getLeasedJob(jobId) ?? this.jobs.get(jobId); }
-  async complete(organizationId: string, jobId: string, status: Extract<Job['status'], 'passed' | 'failed' | 'cancelled'>): Promise<Job | undefined> { const job = this.scheduler.getLeasedJob(jobId); if (job?.organizationId !== organizationId) return undefined; const completed = this.scheduler.complete(jobId, status); if (completed !== undefined) this.jobs.set(jobId, completed); return completed; }
+  private scheduler(organizationId: string): Scheduler { let scheduler = this.schedulers.get(organizationId); if (scheduler === undefined) { scheduler = new Scheduler({ leaseDurationMs: this.leaseDurationMs }); this.schedulers.set(organizationId, scheduler); } return scheduler; }
+  async enqueue(organizationId: string, job: Job): Promise<boolean> { const accepted = job.organizationId === organizationId && this.scheduler(organizationId).enqueue(job); if (accepted) this.jobs.set(job.jobId, job); return accepted; }
+  async lease(organizationId: string, runnerId: string): Promise<Job | undefined> { const runner = this.runners.get(runnerId); if (runner?.organizationId !== organizationId) return undefined; return this.scheduler(organizationId).leaseNext(runner.capabilities); }
+  async getJob(jobId: string): Promise<Job | undefined> { for (const scheduler of this.schedulers.values()) { const leased = scheduler.getLeasedJob(jobId); if (leased !== undefined) return leased; } return this.jobs.get(jobId); }
+  async complete(organizationId: string, jobId: string, status: Extract<Job['status'], 'passed' | 'failed' | 'cancelled'>): Promise<Job | undefined> {
+    const scheduler = this.schedulers.get(organizationId);
+    if (scheduler === undefined) return undefined;
+    const job = scheduler.getLeasedJob(jobId);
+    if (job?.organizationId !== organizationId) return undefined;
+    const completed = scheduler.complete(jobId, status);
+    if (completed !== undefined) this.jobs.set(jobId, completed);
+    return completed;
+  }
 }
 
 type RedisJson = string | Buffer;

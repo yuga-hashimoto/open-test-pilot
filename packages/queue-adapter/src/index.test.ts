@@ -17,4 +17,13 @@ describe('execution queue', () => {
     expect(await queue.enqueue('org-1', job('org-1'))).toBe(true);
     expect(await queue.enqueue('org-1', job('org-1'))).toBe(false);
   });
+  it('never leases a job from another organization', async () => {
+    const queue = new MemoryExecutionQueue();
+    const orgTwoRunner = await queue.registerRunner('org-2', 'runner-2', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+    const orgOneRunner = await queue.registerRunner('org-1', 'runner-1', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+
+    expect(await queue.enqueue('org-1', job('org-1'))).toBe(true);
+    expect(await queue.lease('org-2', orgTwoRunner.runnerId)).toBeUndefined();
+    expect(await queue.lease('org-1', orgOneRunner.runnerId)).toMatchObject({ organizationId: 'org-1', status: 'leased' });
+  });
 });

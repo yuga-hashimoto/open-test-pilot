@@ -58,9 +58,9 @@ export interface TenantRepository {
   getTestManifest(organizationId: string, id: string): MaybePromise<unknown | undefined>;
   updateTestManifest(organizationId: string, id: string, manifest: unknown): MaybePromise<boolean>;
   createRun(organizationId: string, projectId: string, testId: string): MaybePromise<RunRecord>;
-  getRun(id: string): MaybePromise<RunRecord | undefined>;
+  getRun(id: string, organizationId?: string): MaybePromise<RunRecord | undefined>;
   listRuns(organizationId: string): MaybePromise<RunRecord[]>;
-  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>): MaybePromise<RunRecord | undefined>;
+  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, organizationId?: string): MaybePromise<RunRecord | undefined>;
 }
 
 export class InMemoryTenantRepository implements TenantRepository {
@@ -120,11 +120,11 @@ export class InMemoryTenantRepository implements TenantRepository {
     return run;
   }
 
-  getRun(id: string): RunRecord | undefined { return this.runs.get(id); }
+  getRun(id: string, _organizationId?: string): RunRecord | undefined { return this.runs.get(id); }
 
   listRuns(organizationId: string): RunRecord[] { return [...this.runs.values()].filter((run) => run.organizationId === organizationId); }
 
-  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>): RunRecord | undefined {
+  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, _organizationId?: string): RunRecord | undefined {
     const current = this.runs.get(id);
     if (current === undefined) return undefined;
     const updated = { ...current, ...patch };
@@ -344,12 +344,14 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (project === undefined || test === undefined) return reply.code(404).send({ error: 'project or test not found' });
     const run = await repository.createRun(request.params.organizationId, body.projectId, body.testId);
     const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId: request.params.organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', ...(body.priority === undefined ? {} : { priority: body.priority }), ...(body.requiredLabels === undefined ? {} : { requiredLabels: body.requiredLabels }) };
-    if (!await executionQueue.enqueue(request.params.organizationId, job)) { await repository.updateRun(run.id, { status: 'failed', endedAt: new Date().toISOString() }); return reply.code(503).send({ error: 'run queue unavailable' }); }
+    if (!await executionQueue.enqueue(request.params.organizationId, job)) { await repository.updateRun(run.id, { status: 'failed', endedAt: new Date().toISOString() }, request.params.organizationId); return reply.code(503).send({ error: 'run queue unavailable' }); }
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
 
   app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     return reply.send(run);
@@ -361,7 +363,9 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   });
 
   app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/report', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     if (run.status === 'queued' || run.status === 'running') return reply.code(202).send({ runId: run.id, status: run.status });
@@ -369,14 +373,18 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   });
 
   app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/failures', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     return reply.send({ runId: run.id, failures: runResults.get(run.id)?.failures ?? [] });
   });
 
   app.get<{ Params: StepParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     const step = runResults.get(run.id)?.steps.find((candidate) => candidate !== null && typeof candidate === 'object' && (candidate as { stepId?: unknown }).stepId === request.params.stepId);
@@ -384,15 +392,19 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   });
 
   app.get<{ Params: { runId: string; baselineRunId: string }; Headers: TenantHeaders }>('/v1/runs/:runId/compare/:baselineRunId', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
-    const baseline = await repository.getRun(request.params.baselineRunId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
+    const baseline = await repository.getRun(request.params.baselineRunId, organizationId);
     if (run === undefined || baseline === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId) || baseline.organizationId !== run.organizationId) return reply.code(403).send({ error: 'organization access denied' });
     return reply.send({ runId: run.id, baselineRunId: baseline.id, statusChanged: run.status !== baseline.status });
   });
 
   app.post<{ Params: RunParams; Headers: TenantHeaders; Body: { reason?: string } }>('/v1/runs/:runId/repair', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     if (typeof request.body?.reason !== 'string' || request.body.reason.trim() === '') return reply.code(400).send({ error: 'reason is required' });
@@ -411,7 +423,9 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   });
 
   app.post<{ Params: RunParams; Headers: TenantHeaders; Body: CreateArtifactBody }>('/v1/runs/:runId/artifacts', async (request, reply) => {
-    const run = await repository.getRun(request.params.runId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     const body = request.body;
@@ -470,7 +484,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
     const job = await executionQueue.lease(organizationId, request.params.runnerId);
-    if (job !== undefined) await repository.updateRun(job.runId, { status: 'running', startedAt: new Date().toISOString() });
+    if (job !== undefined) await repository.updateRun(job.runId, { status: 'running', startedAt: new Date().toISOString() }, organizationId);
     return reply.send({ job: job ?? null });
   });
 
@@ -483,7 +497,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const result = await executionQueue.complete(tenantId(request) ?? '', request.params.jobId, status);
     if (result === undefined) return reply.code(404).send({ error: 'leased job not found' });
     if (request.body?.result !== undefined) runResults.set(result.runId, { ...request.body.result, failures: request.body.result.failures ?? [], steps: request.body.result.steps ?? [] });
-    await repository.updateRun(result.runId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() });
+    await repository.updateRun(result.runId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() }, leasedJob.organizationId);
     return reply.send({ jobId: result.jobId, status: result.status });
   });
 

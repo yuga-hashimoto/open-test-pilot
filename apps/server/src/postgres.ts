@@ -103,9 +103,12 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
-  async getRun(id: string): Promise<RunRecord | undefined> {
-    const result = await this.pool.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('SELECT id, organization_id, project_id, test_id, status, created_at, started_at, ended_at FROM runs WHERE id = $1', [id]);
-    return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+  async getRun(id: string, organizationId?: string): Promise<RunRecord | undefined> {
+    if (organizationId === undefined) return undefined;
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('SELECT id, organization_id, project_id, test_id, status, created_at, started_at, ended_at FROM runs WHERE organization_id = $1 AND id = $2', [organizationId, id]);
+      return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+    });
   }
 
   async listRuns(organizationId: string): Promise<RunRecord[]> {
@@ -115,10 +118,9 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
-  async updateRun(id: string, patch: RunPatch): Promise<RunRecord | undefined> {
-    const existing = await this.getRun(id);
-    if (existing === undefined) return undefined;
-    return this.tenantQuery(existing.organizationId, async (client) => {
+  async updateRun(id: string, patch: RunPatch, organizationId?: string): Promise<RunRecord | undefined> {
+    if (organizationId === undefined) return undefined;
+    return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('UPDATE runs SET status = COALESCE($2, status), started_at = COALESCE($3, started_at), ended_at = COALESCE($4, ended_at) WHERE id = $1 RETURNING id, organization_id, project_id, test_id, status, created_at, started_at, ended_at', [id, patch.status ?? null, patch.startedAt ?? null, patch.endedAt ?? null]);
       return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
     });

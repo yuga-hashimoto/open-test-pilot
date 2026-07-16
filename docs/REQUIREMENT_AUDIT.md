@@ -9,7 +9,7 @@ This is the live audit of the attached platform design against `main`. It is int
 | Mobile Manifest path | Mobile schema, WebdriverIO generator, Local Runner branch, Appium adapter, real Android gate | Android implemented; iOS requires an available XCUITest device/simulator |
 | Mobile failure evidence | Screenshot, page source, activity, Appium/logcat, unavailable reasons, locator metadata | Implemented and tested |
 | Local HTML report | Report package and local runner artifacts | Implemented |
-| Server tenant API | Fastify routes, tenant checks, runner queue, artifact store, manifest CRUD, result failures/steps | Implemented in-memory; PostgreSQL persistence is partial |
+| Server tenant API | Fastify routes, tenant checks, tenant-isolated queue, artifact store, manifest CRUD, result failures/steps; PostgreSQL repository and forced RLS live smoke | Core API and PostgreSQL repository implemented; result/entity persistence wiring remains partial |
 | MCP contract | 19 declared tools and live `tools/list` smoke test | Implemented; some server resources still expose minimal records |
 | GitHub App | Real installation credentials, branch/commit/PR/check/comment smoke flow | Implemented for the exercised adapter flow; full sync/permission persistence remains partial |
 | Distributed Runner | Registration, heartbeat, lease, completion, artifact upload, Docker deny-by-default args | Implemented as protocol/runtime foundation; full server-to-container manifest execution remains partial |
