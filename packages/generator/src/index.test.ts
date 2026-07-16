@@ -50,12 +50,32 @@ describe('generatePlaywright', () => {
     );
   });
 
-  it('rejects reserved control nodes until the executor supports them', () => {
+  it('generates executable control flow with stable source mappings', () => {
     const controlManifest = {
       ...manifest,
-      steps: [{ ...manifest.steps[0], actions: [{ id: 'loop', type: 'forEach' }] }],
+      variables: [{ name: 'items', defaultValue: '["a", "b"]' }],
+      steps: [{ ...manifest.steps[0], actions: [{
+        id: 'loop',
+        type: 'control.forEach',
+        items: '${var.items}',
+        variable: 'item',
+        children: [{ id: 'assert-item', type: 'web.expectVisible', selector: '#item' }],
+      }, {
+        id: 'branch',
+        type: 'control.if',
+        condition: '${var.enabled}',
+        children: [{ id: 'enabled', type: 'web.click', selector: '#enabled' }],
+        elseChildren: [{ id: 'disabled', type: 'web.click', selector: '#disabled' }],
+      }] }],
     } as Manifest;
-    expect(() => generatePlaywright(controlManifest)).toThrow(/Unsupported action type: forEach/);
+    const output = generatePlaywright(controlManifest);
+    expect(output.code).toContain('for (const item of');
+    expect(output.code).toContain("vars['item'] = item;");
+    expect(output.code).toContain('if (truthy(');
+    expect(output.sourceMap.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: 'loop', kind: 'action' }),
+      expect.objectContaining({ nodeId: 'assert-item', kind: 'action' }),
+    ]));
   });
 
   it('maps semantic label and role locators to Playwright locator APIs', () => {
@@ -72,5 +92,37 @@ describe('generatePlaywright', () => {
     const output = generatePlaywright(semanticManifest);
     expect(output.code).toContain("page.getByLabel('メールアドレス')");
     expect(output.code).toContain("page.getByRole('button', { name: 'ログイン' })");
+  });
+
+  it('generates switch, numeric for, while, and function calls', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      functions: [{ id: 'warmup', parameters: [], actions: [{ id: 'warmup-action', type: 'web.expectVisible', selector: '#ready' }] }],
+      steps: [{ id: 'control', actions: [
+        { id: 'switch', type: 'control.switch', value: 'ready', cases: { ready: [{ id: 'case-ready', type: 'web.expectVisible', selector: '#ready' }] }, defaultChildren: [{ id: 'case-default', type: 'web.expectVisible', selector: '#default' }] },
+        { id: 'for', type: 'control.for', variable: 'index', from: 0, to: 2, step: 1, children: [{ id: 'for-action', type: 'web.expectVisible', selector: '#ready' }] },
+        { id: 'while', type: 'control.while', condition: 'false', maxAttempts: 1, children: [{ id: 'while-action', type: 'web.expectVisible', selector: '#ready' }] },
+        { id: 'call', type: 'control.call', functionName: 'warmup', arguments: {} },
+      ] }],
+    } as Manifest);
+    expect(output.code).toContain('switch (');
+    expect(output.code).toContain('for (let index = 0');
+    expect(output.code).toContain('while (');
+    expect(output.code).toContain('await callFunction');
+  });
+
+  it('generates executable API outputs, step interpolation, and custom action imports', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      steps: [{ id: 'api', actions: [{ id: 'create', type: 'api.request', method: 'GET', url: 'http://localhost/user', outputs: { email: '$.email' } }] }, {
+        id: 'use-output',
+        actions: [{ id: 'fill', type: 'web.fill', selector: '#email', value: '${steps.api.email}' }, { id: 'custom', type: 'custom.action', actionType: 'example.record', input: { product: '${steps.api.email}' } }],
+      }],
+    } as Manifest, { customActionModule: '../examples/custom-actions.mjs' });
+    expect(output.code).toContain("import customActions from '../examples/custom-actions.mjs';");
+    expect(output.code).toContain('stepOutputs');
+    expect(output.code).toContain('response_create');
+    expect(output.code).toContain("resolveValue('${steps.api.email}')");
+    expect(output.code).toContain('customActions[type]');
   });
 });

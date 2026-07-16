@@ -1,0 +1,131 @@
+schemaVersion: "1.0.0"
+id: complex-flow
+name: API and Web complex flow
+description: Exercises API setup, browser interaction, conditions, loops, parallel branches, custom actions, and try/finally cleanup.
+type: e2e
+tags:
+  - smoke
+  - complex
+priority: high
+preconditions: []
+variables: []
+secrets: []
+setup: []
+functions:
+  - id: verify-dashboard
+    actions:
+      - id: function-dashboard
+        type: web.expectVisible
+        selector: "[data-testid=dashboard]"
+steps:
+  - id: create-user
+    description: Create a fixture user through the API
+    actions:
+      - id: create-user-request
+        type: api.request
+        method: GET
+        url: http://127.0.0.1:4173/api/test-user
+        expectedStatus: 200
+        jsonAssertions:
+          email: test@example.com
+        outputs:
+          email: $.email
+          password: $.password
+  - id: login
+    description: Log in through the real browser
+    actions:
+      - id: open-login
+        type: web.goto
+        url: http://127.0.0.1:4173/login
+      - id: fill-email
+        type: web.fill
+        selector: "label=メールアドレス"
+        value: "${steps.create-user.email}"
+      - id: submit-login
+        type: web.click
+        selector: "role=button[name=ログイン]"
+      - id: assert-dashboard
+        type: web.expectVisible
+        selector: "[data-testid=dashboard]"
+  - id: branch-and-loop
+    description: Execute conditional, repeated, and custom actions
+    actions:
+      - id: logged-in-branch
+        type: control.if
+        condition: "${steps.create-user.email} == test@example.com"
+        children:
+          - id: branch-dashboard
+            type: web.expectVisible
+            selector: "[data-testid=dashboard]"
+        elseChildren:
+          - id: branch-failure
+            type: web.expectVisible
+            selector: "#missing"
+      - id: list-products
+        type: api.request
+        method: GET
+        url: http://127.0.0.1:4173/api/products
+        expectedStatus: 200
+        outputs:
+          items: $
+      - id: record-products
+        type: control.forEach
+        items: "${steps.list-products.items}"
+        variable: product
+        children:
+          - id: record-product
+            type: custom.action
+            actionType: example.record-product
+            input:
+              product: "${var.product}"
+  - id: parallel-checks
+    description: Verify two independent API endpoints in parallel
+    actions:
+      - id: parallel
+        type: control.parallel
+        branches:
+          - - id: health
+              type: api.request
+              method: GET
+              url: http://127.0.0.1:4173/api/health
+              expectedStatus: 200
+              jsonAssertions:
+                ok: true
+          - - id: products-again
+              type: api.request
+              method: GET
+              url: http://127.0.0.1:4173/api/products
+              expectedStatus: 200
+  - id: cleanup-flow
+    description: Always clean up fixture data
+    actions:
+      - id: try-cleanup
+        type: control.try
+        children:
+          - id: cleanup-check
+            type: web.expectVisible
+            selector: "[data-testid=dashboard]"
+        finally:
+          - id: delete-user
+            type: api.request
+            method: GET
+            url: http://127.0.0.1:4173/api/delete-user
+            expectedStatus: 204
+      - id: call-function
+        type: control.call
+        functionName: verify-dashboard
+        arguments: {}
+cleanup: []
+artifacts:
+  screenshots: after
+  traces: true
+runner:
+  minBrowsers:
+    - chromium
+permissions:
+  networkAccess: true
+source:
+  repository: local
+  path: examples/manifests/complex-flow.yaml
+generatedCode:
+  path: generated/complex-flow.spec.ts

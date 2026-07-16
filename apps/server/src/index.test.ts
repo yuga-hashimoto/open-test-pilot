@@ -34,7 +34,7 @@ describe('OpenTestPilot server API', () => {
       method: 'POST',
       url: `/v1/organizations/${organizationId}/tests`,
       headers: { 'x-organization-id': organizationId },
-      payload: { projectId, name: 'Login', manifestId: 'login' },
+      payload: { projectId, name: 'Login', manifestId: 'login', manifest: { schemaVersion: '1.0.0', id: 'login' } },
     });
     expect(test.statusCode).toBe(201);
     const listed = await app.inject({
@@ -44,6 +44,20 @@ describe('OpenTestPilot server API', () => {
     });
     expect(listed.statusCode).toBe(200);
     expect(listed.json<{ tests: Array<{ name: string }> }>().tests).toEqual([expect.objectContaining({ name: 'Login', id: expect.any(String), projectId, organizationId })]);
+    const testId = listed.json<{ tests: Array<{ id: string }> }>().tests[0]?.id;
+    const detail = await app.inject({ method: 'GET', url: `/v1/tests/${testId}`, headers: { 'x-organization-id': organizationId } });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json<{ manifestId: string }>().manifestId).toBe('login');
+    const manifest = await app.inject({ method: 'GET', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId } });
+    expect(manifest.statusCode).toBe(200);
+    expect(manifest.json<{ manifestId: string }>().manifestId).toBe('login');
+    expect(manifest.json<{ id: string }>().id).toBe('login');
+    const updatedManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { schemaVersion: '1.0.0', id: 'login', name: 'Updated' } });
+    expect(updatedManifest.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId } })).json<{ name: string }>().name).toBe('Updated');
+    const generated = await app.inject({ method: 'GET', url: `/v1/tests/${testId}/generated-code`, headers: { 'x-organization-id': organizationId } });
+    expect(generated.statusCode).toBe(200);
+    expect(generated.json<{ testId: string }>().testId).toBe(testId);
   });
 
   it('returns an asynchronous run ID and exposes OpenAPI', async () => {
@@ -173,6 +187,30 @@ describe('OpenTestPilot server API', () => {
     await app.inject({ method: 'POST', url: `/v1/jobs/${jobId}/complete`, headers: { 'x-organization-id': organizationId }, payload: { status: 'passed' } });
     const completed = await app.inject({ method: 'GET', url: `/v1/runs/${runId}`, headers: { 'x-organization-id': organizationId } });
     expect(completed.json<{ status: string }>().status).toBe('passed');
+    await app.close();
+  });
+
+  it('serves repository, change-request, repair, and pull-request MCP resources', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'MCP' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const repository = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/repositories`, headers: { 'x-organization-id': organizationId }, payload: { owner: 'openai', name: 'open-test-pilot', provider: 'github' } });
+    expect(repository.statusCode).toBe(201);
+    const repositoryId = repository.json<{ id: string }>().id;
+    expect((await app.inject({ method: 'GET', url: `/v1/repositories/${repositoryId}`, headers: { 'x-organization-id': organizationId } })).statusCode).toBe(200);
+    const created = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/change-requests`, headers: { 'x-organization-id': organizationId }, payload: { title: 'Fix login', description: 'Repair selector' } });
+    expect(created.statusCode).toBe(201);
+    const changeRequestId = created.json<{ id: string }>().id;
+    expect((await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/change-requests`, headers: { 'x-organization-id': organizationId } })).json<{ changeRequests: unknown[] }>().changeRequests).toHaveLength(1);
+    expect((await app.inject({ method: 'PATCH', url: `/v1/change-requests/${changeRequestId}`, headers: { 'x-organization-id': organizationId }, payload: { status: 'approved' } })).json<{ status: string }>().status).toBe('approved');
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'MCP project' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'MCP test', manifestId: 'mcp' } });
+    const testId = test.json<{ id: string }>().id;
+    const run = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } });
+    const runId = run.json<{ runId: string }>().runId;
+    expect((await app.inject({ method: 'POST', url: `/v1/runs/${runId}/repair`, headers: { 'x-organization-id': organizationId }, payload: { reason: 'flaky selector' } })).statusCode).toBe(201);
+    expect((await app.inject({ method: 'POST', url: '/v1/pull-requests', headers: { 'x-organization-id': organizationId }, payload: { url: 'https://github.com/openai/open-test-pilot/pull/1' } })).statusCode).toBe(201);
     await app.close();
   });
 });

@@ -80,6 +80,22 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
+  async getTestManifest(organizationId: string, id: string): Promise<unknown | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ manifest: unknown }>('SELECT tv.manifest FROM test_versions tv INNER JOIN tests t ON t.id = tv.test_id WHERE tv.organization_id = $1 AND tv.test_id = $2 ORDER BY tv.created_at DESC LIMIT 1', [organizationId, id]);
+      return result.rows[0]?.manifest;
+    });
+  }
+
+  async updateTestManifest(organizationId: string, id: string, manifest: unknown): Promise<boolean> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const test = await client.query<{ id: string }>('SELECT id FROM tests WHERE organization_id = $1 AND id = $2', [organizationId, id]);
+      if (test.rows[0] === undefined) return false;
+      await client.query('INSERT INTO test_versions (organization_id, test_id, commit_sha, manifest) VALUES ($1, $2, $3, $4::jsonb)', [organizationId, id, process.env['GIT_COMMIT_SHA'] ?? 'local', JSON.stringify(manifest)]);
+      return true;
+    });
+  }
+
   async createRun(organizationId: string, projectId: string, testId: string): Promise<RunRecord> {
     return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }>('INSERT INTO runs (organization_id, project_id, test_id, status) VALUES ($1, $2, $3, $4) RETURNING id, organization_id, project_id, test_id, status, created_at, started_at, ended_at', [organizationId, projectId, testId, 'queued']);

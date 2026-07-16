@@ -55,6 +55,8 @@ export interface TenantRepository {
   createTest(organizationId: string, projectId: string, name: string, manifestId: string): MaybePromise<TestRecord>;
   listTests(organizationId: string): MaybePromise<TestRecord[]>;
   getTest(organizationId: string, id: string): MaybePromise<TestRecord | undefined>;
+  getTestManifest(organizationId: string, id: string): MaybePromise<unknown | undefined>;
+  updateTestManifest(organizationId: string, id: string, manifest: unknown): MaybePromise<boolean>;
   createRun(organizationId: string, projectId: string, testId: string): MaybePromise<RunRecord>;
   getRun(id: string): MaybePromise<RunRecord | undefined>;
   listRuns(organizationId: string): MaybePromise<RunRecord[]>;
@@ -66,6 +68,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly projects = new Map<string, Project>();
   private readonly tests = new Map<string, TestRecord>();
   private readonly runs = new Map<string, RunRecord>();
+  private readonly manifests = new Map<string, unknown>();
 
   createOrganization(name: string): Organization {
     const organization = { id: `org-${randomUUID()}`, name, createdAt: new Date().toISOString() };
@@ -101,6 +104,16 @@ export class InMemoryTenantRepository implements TenantRepository {
     return test?.organizationId === organizationId ? test : undefined;
   }
 
+  getTestManifest(organizationId: string, id: string): unknown | undefined {
+    return this.getTest(organizationId, id) === undefined ? undefined : this.manifests.get(id);
+  }
+
+  updateTestManifest(organizationId: string, id: string, manifest: unknown): boolean {
+    if (this.getTest(organizationId, id) === undefined) return false;
+    this.manifests.set(id, manifest);
+    return true;
+  }
+
   createRun(organizationId: string, projectId: string, testId: string): RunRecord {
     const run = { id: `run-${randomUUID()}`, organizationId, projectId, testId, status: 'queued' as const, createdAt: new Date().toISOString() };
     this.runs.set(run.id, run);
@@ -122,9 +135,10 @@ export class InMemoryTenantRepository implements TenantRepository {
 
 interface OrganizationParams { organizationId: string }
 interface RunParams { runId: string }
+interface ResourceParams { id: string }
 interface CreateOrganizationBody { name: string }
 interface CreateProjectBody { name: string }
-interface CreateTestBody { projectId: string; name: string; manifestId: string }
+interface CreateTestBody { projectId: string; name: string; manifestId: string; manifest?: unknown }
 interface CreateRunBody { projectId: string; testId: string; priority?: number; requiredLabels?: string[] }
 interface TenantHeaders { 'x-organization-id'?: string }
 interface GitHubStartQuery { redirectUri?: string }
@@ -138,6 +152,12 @@ interface CreateScheduleBody { projectId: string; testId: string; cron: string; 
 interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
 interface ArtifactRecord { id: string; organizationId: string; runId: string; key: string; contentType: string; size: number; createdAt: string }
+interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: string }
+interface RepositoryRecord { id: string; organizationId: string; owner: string; name: string; provider: string; installationId?: string; createdAt: string }
+interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
+interface CreateChangeRequestBody { title: string; description?: string }
+interface RepairRecord { id: string; organizationId: string; runId: string; reason: string; status: 'queued'; createdAt: string }
+interface PullRequestRecord { id: string; organizationId: string; url: string; createdAt: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
   return request.headers['x-organization-id'];
@@ -168,6 +188,10 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const oauthStates = new Set<string>();
   const schedules = new Map<string, ScheduleRecord>();
   const artifacts = new Map<string, ArtifactRecord>();
+  const repositories = new Map<string, RepositoryRecord>();
+  const changeRequests = new Map<string, ChangeRequestRecord>();
+  const repairs = new Map<string, RepairRecord>();
+  const pullRequests = new Map<string, PullRequestRecord>();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
@@ -214,12 +238,99 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const body = request.body;
     if (typeof body?.projectId !== 'string' || typeof body.name !== 'string' || typeof body.manifestId !== 'string') return reply.code(400).send({ error: 'projectId, name, and manifestId are required' });
     if (await repository.getProject(request.params.organizationId, body.projectId) === undefined) return reply.code(404).send({ error: 'project not found' });
-    return reply.code(201).send(await repository.createTest(request.params.organizationId, body.projectId, body.name.trim(), body.manifestId));
+    const test = await repository.createTest(request.params.organizationId, body.projectId, body.name.trim(), body.manifestId);
+    if (body.manifest !== undefined) await repository.updateTestManifest(request.params.organizationId, test.id, body.manifest);
+    return reply.code(201).send(test);
   });
 
   app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/tests', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     return reply.send({ tests: await repository.listTests(request.params.organizationId) });
+  });
+
+  app.get<{ Params: { projectId: string }; Headers: TenantHeaders }>('/v1/projects/:projectId', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const project = await repository.getProject(organizationId, request.params.projectId);
+    return project === undefined ? reply.code(404).send({ error: 'project not found' }) : reply.send(project);
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateRepositoryBody }>('/v1/organizations/:organizationId/repositories', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.owner !== 'string' || typeof body.name !== 'string' || body.owner.trim() === '' || body.name.trim() === '') return reply.code(400).send({ error: 'owner and name are required' });
+    const repository: RepositoryRecord = { id: `repository-${randomUUID()}`, organizationId: request.params.organizationId, owner: body.owner.trim(), name: body.name.trim(), provider: body.provider ?? 'github', ...(body.installationId === undefined ? {} : { installationId: body.installationId }), createdAt: new Date().toISOString() };
+    repositories.set(repository.id, repository);
+    return reply.code(201).send(repository);
+  });
+
+  app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders }>('/v1/repositories/:repositoryId', async (request, reply) => {
+    const record = repositories.get(request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (!requireTenant(request, reply, record.organizationId)) return reply;
+    return reply.send(record);
+  });
+
+  app.get<{ Params: ResourceParams; Headers: TenantHeaders }>('/v1/tests/:id', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const test = await repository.getTest(organizationId, request.params.id);
+    return test === undefined ? reply.code(404).send({ error: 'test not found' }) : reply.send(test);
+  });
+
+  app.get<{ Params: ResourceParams; Headers: TenantHeaders }>('/v1/tests/:id/manifest', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const test = await repository.getTest(organizationId, request.params.id);
+    if (test === undefined) return reply.code(404).send({ error: 'test not found' });
+    const manifest = await repository.getTestManifest(organizationId, test.id);
+    return reply.send(manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest) ? { testId: test.id, manifestId: test.manifestId, ...(manifest as Record<string, unknown>) } : { testId: test.id, manifestId: test.manifestId, schemaVersion: '1.0.0' });
+  });
+
+  app.put<{ Params: ResourceParams; Headers: TenantHeaders; Body: unknown }>('/v1/tests/:id/manifest', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    if (request.body === null || typeof request.body !== 'object' || Array.isArray(request.body)) return reply.code(400).send({ error: 'manifest object is required' });
+    if (!await repository.updateTestManifest(organizationId, request.params.id, request.body)) return reply.code(404).send({ error: 'test not found' });
+    return reply.send({ testId: request.params.id, saved: true });
+  });
+
+  app.get<{ Params: ResourceParams; Headers: TenantHeaders }>('/v1/tests/:id/generated-code', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const test = await repository.getTest(organizationId, request.params.id);
+    return test === undefined ? reply.code(404).send({ error: 'test not found' }) : reply.send({ testId: test.id, manifestId: test.manifestId, path: `generated/${test.manifestId}.spec.ts` });
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateChangeRequestBody }>('/v1/organizations/:organizationId/change-requests', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    if (typeof request.body?.title !== 'string' || request.body.title.trim() === '') return reply.code(400).send({ error: 'title is required' });
+    const timestamp = new Date().toISOString();
+    const record: ChangeRequestRecord = { id: `change-request-${randomUUID()}`, organizationId: request.params.organizationId, title: request.body.title.trim(), description: request.body.description ?? '', status: 'open', createdAt: timestamp, updatedAt: timestamp };
+    changeRequests.set(record.id, record);
+    return reply.code(201).send(record);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/change-requests', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ changeRequests: [...changeRequests.values()].filter((record) => record.organizationId === request.params.organizationId) });
+  });
+
+  app.get<{ Params: { changeRequestId: string }; Headers: TenantHeaders }>('/v1/change-requests/:changeRequestId', async (request, reply) => {
+    const record = changeRequests.get(request.params.changeRequestId);
+    if (record === undefined) return reply.code(404).send({ error: 'change request not found' });
+    if (!requireTenant(request, reply, record.organizationId)) return reply;
+    return reply.send(record);
+  });
+
+  app.patch<{ Params: { changeRequestId: string }; Headers: TenantHeaders; Body: { status?: ChangeRequestRecord['status']; description?: string } }>('/v1/change-requests/:changeRequestId', async (request, reply) => {
+    const record = changeRequests.get(request.params.changeRequestId);
+    if (record === undefined) return reply.code(404).send({ error: 'change request not found' });
+    if (!requireTenant(request, reply, record.organizationId)) return reply;
+    if (request.body?.status !== undefined && !['open', 'approved', 'rejected'].includes(request.body.status)) return reply.code(400).send({ error: 'invalid change request status' });
+    const updated: ChangeRequestRecord = { ...record, ...(request.body?.status === undefined ? {} : { status: request.body.status }), ...(request.body?.description === undefined ? {} : { description: request.body.description }), updatedAt: new Date().toISOString() };
+    changeRequests.set(updated.id, updated);
+    return reply.send(updated);
   });
 
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateRunBody }>('/v1/organizations/:organizationId/runs', async (request, reply) => {
@@ -255,6 +366,47 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ runId: run.id, status: run.status, reportUrl: `/v1/runs/${run.id}/report` });
   });
 
+  app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/failures', async (request, reply) => {
+    const run = await repository.getRun(request.params.runId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    return reply.send({ runId: run.id, failures: [] });
+  });
+
+  app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
+    const run = await repository.getRun(request.params.runId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    return reply.code(404).send({ error: 'step result not found' });
+  });
+
+  app.get<{ Params: { runId: string; baselineRunId: string }; Headers: TenantHeaders }>('/v1/runs/:runId/compare/:baselineRunId', async (request, reply) => {
+    const run = await repository.getRun(request.params.runId);
+    const baseline = await repository.getRun(request.params.baselineRunId);
+    if (run === undefined || baseline === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId) || baseline.organizationId !== run.organizationId) return reply.code(403).send({ error: 'organization access denied' });
+    return reply.send({ runId: run.id, baselineRunId: baseline.id, statusChanged: run.status !== baseline.status });
+  });
+
+  app.post<{ Params: RunParams; Headers: TenantHeaders; Body: { reason?: string } }>('/v1/runs/:runId/repair', async (request, reply) => {
+    const run = await repository.getRun(request.params.runId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    if (typeof request.body?.reason !== 'string' || request.body.reason.trim() === '') return reply.code(400).send({ error: 'reason is required' });
+    const repair: RepairRecord = { id: `repair-${randomUUID()}`, organizationId: run.organizationId, runId: run.id, reason: request.body.reason.trim(), status: 'queued', createdAt: new Date().toISOString() };
+    repairs.set(repair.id, repair);
+    return reply.code(201).send(repair);
+  });
+
+  app.post<{ Headers: TenantHeaders; Body: { url?: string } }>('/v1/pull-requests', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') return reply.code(400).send({ error: 'url is required' });
+    const record: PullRequestRecord = { id: `pull-request-${randomUUID()}`, organizationId, url: request.body.url.trim(), createdAt: new Date().toISOString() };
+    pullRequests.set(record.id, record);
+    return reply.code(201).send(record);
+  });
+
   app.post<{ Params: RunParams; Headers: TenantHeaders; Body: CreateArtifactBody }>('/v1/runs/:runId/artifacts', async (request, reply) => {
     const run = await repository.getRun(request.params.runId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
@@ -276,6 +428,13 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const bytes = await artifactStore.get({ organizationId: record.organizationId, key: `${record.runId}/${record.id}/${record.key}` });
     if (bytes === undefined) return reply.code(404).send({ error: 'artifact body not found' });
     return reply.type(record.contentType).send(bytes);
+  });
+
+  app.get<{ Params: { artifactId: string }; Headers: TenantHeaders }>('/v1/artifacts/:artifactId/metadata', async (request, reply) => {
+    const record = artifacts.get(request.params.artifactId);
+    if (record === undefined) return reply.code(404).send({ error: 'artifact not found' });
+    if (!requireTenant(request, reply, record.organizationId)) return reply;
+    return reply.send(record);
   });
 
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateRunnerBody }>('/v1/organizations/:organizationId/runners', async (request, reply) => {
@@ -353,12 +512,25 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations': { post: {} },
     '/v1/organizations/{organizationId}': { get: {} },
     '/v1/organizations/{organizationId}/projects': { post: {} },
+    '/v1/organizations/{organizationId}/repositories': { post: {} },
+    '/v1/repositories/{repositoryId}': { get: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
+    '/v1/tests/{id}': { get: {} },
+    '/v1/tests/{id}/manifest': { get: {}, put: {} },
+    '/v1/tests/{id}/generated-code': { get: {} },
+    '/v1/organizations/{organizationId}/change-requests': { get: {}, post: {} },
+    '/v1/change-requests/{changeRequestId}': { get: {}, patch: {} },
     '/v1/organizations/{organizationId}/runs': { get: {}, post: {} },
     '/v1/runs/{runId}': { get: {} },
     '/v1/runs/{runId}/report': { get: {} },
+    '/v1/runs/{runId}/failures': { get: {} },
+    '/v1/runs/{runId}/steps/{stepId}': { get: {} },
+    '/v1/runs/{runId}/compare/{baselineRunId}': { get: {} },
+    '/v1/runs/{runId}/repair': { post: {} },
     '/v1/runs/{runId}/artifacts': { post: {} },
     '/v1/artifacts/{artifactId}': { get: {} },
+    '/v1/artifacts/{artifactId}/metadata': { get: {} },
+    '/v1/pull-requests': { post: {} },
     '/v1/organizations/{organizationId}/runners': { post: {} },
     '/v1/runners/{runnerId}/heartbeat': { post: {} },
     '/v1/organizations/{organizationId}/jobs': { post: {} },

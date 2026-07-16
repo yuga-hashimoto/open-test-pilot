@@ -42,3 +42,47 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm testpilot manifest validate examples/manifests/fixture-login.yaml
+
+  manifest-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec node examples/fixtures/web/server.mjs &
+      - run: pnpm testpilot manifest validate examples/manifests/complex-flow.yaml
+      - run: pnpm testpilot manifest generate examples/manifests/complex-flow.yaml
+      - run: pnpm testpilot run examples/manifests/complex-flow.yaml --actions examples/custom-actions.mjs
+      - run: pnpm exec playwright test --config=playwright.generated.config.ts --grep "API and Web complex flow"
+
+  container-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build -f infra/docker/Dockerfile.server -t opentestpilot-server:ci .
+      - run: docker build -f infra/docker/Dockerfile.runner -t opentestpilot-runner:ci .
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high

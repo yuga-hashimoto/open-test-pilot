@@ -9,11 +9,12 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "build": "pnpm -r build",
-    "testpilot": "node packages/cli/dist/index.js"
+    "testpilot": "tsx packages/cli/src/index.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@playwright/test": "^1.55.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
   },

@@ -11,6 +11,8 @@ import {
   type RunStatus,
   type StepResult,
   type TestRunResult,
+  validateTestRunResult,
+  redactSecrets,
 } from './index.js';
 
 describe('Result Protocol', () => {
@@ -242,5 +244,19 @@ describe('Result Protocol', () => {
       expect(FailureCategorySchema.safeParse('RANDOM_ERROR').success).toBe(false);
       expect(FailureCategorySchema.safeParse('').success).toBe(false);
     });
+  });
+
+  it('validates stable IDs, artifact references, and failure categories', () => {
+    const result: TestRunResult = {
+      runId: 'run-1', testId: 'test-1', manifestId: 'manifest-1', status: 'failed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', metadata: { browser: 'Chromium', browserVersion: '1', viewport: { width: 1, height: 1 } },
+      steps: [{ stepId: 'step-1', status: 'failed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', actions: [{ actionId: 'action-1', type: 'web.click', status: 'failed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', error: { message: 'not found', category: 'LOCATOR_CHANGED' }, artifacts: ['artifact-1'] }] }],
+      artifacts: [{ id: 'artifact-1', type: 'screenshot', path: 'screenshots/failure.png', createdAt: '2026-07-16T00:00:01.000Z' }],
+    };
+    expect(validateTestRunResult(result)).toEqual({ valid: true, errors: [] });
+    expect(validateTestRunResult({ ...result, runId: '' })).toMatchObject({ valid: false });
+  });
+
+  it('redacts configured secret values from nested result data', () => {
+    expect(redactSecrets({ message: 'Bearer secret-token', nested: ['secret-token'] }, ['secret-token'])).toEqual({ message: 'Bearer [REDACTED]', nested: ['[REDACTED]'] });
   });
 });

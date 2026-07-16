@@ -2,14 +2,17 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { generatePlaywright } from '@open-test-pilot/generator';
 import { runLocal } from '@open-test-pilot/local-runner';
+import type { CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
+import { diffManifests, migrateManifest, previewMigration } from '@open-test-pilot/manifest-migrator';
 import { parseManifest } from '@open-test-pilot/manifest-parser';
 import { renderReport } from '@open-test-pilot/report';
 import type { TestRunResult } from '@open-test-pilot/result-schema';
 
 export async function runCli(args: string[], output: string[] = []): Promise<number> {
-  const [group, command, input] = args;
+  const [group, command, input, ...rest] = args;
   if (group === 'manifest' && (command === 'validate' || command === 'generate') && input !== undefined) {
     const source = await readFile(input, 'utf8');
     const parsed = parseManifest(source, input);
@@ -32,6 +35,29 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     return 0;
   }
 
+  if (group === 'manifest' && command === 'migrate' && input !== undefined) {
+    const source = await readFile(input, 'utf8');
+    const preview = previewMigration(parseYaml(source));
+    if (!rest.includes('--approve')) {
+      output.push('migration preview (no files changed):');
+      output.push(preview.yamlDiff);
+      output.push('pass --approve to write the migrated Manifest');
+      return 0;
+    }
+    await writeFile(input, stringifyYaml(migrateManifest(parseYaml(source), { approve: true })), 'utf8');
+    output.push(`migrated: ${input}`);
+    output.push('generated-code diff:');
+    output.push(preview.generatedCodeDiff);
+    return 0;
+  }
+
+  if (group === 'manifest' && command === 'diff' && input !== undefined && rest[0] !== undefined) {
+    const before = parseYaml(await readFile(input, 'utf8')) as unknown;
+    const after = parseYaml(await readFile(rest[0], 'utf8')) as unknown;
+    output.push(diffManifests(before, after));
+    return 0;
+  }
+
   if (group === 'run' && command !== undefined) {
     const source = await readFile(command, 'utf8');
     const parsed = parseManifest(source, command);
@@ -39,7 +65,19 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
       parsed.diagnostics.forEach((diagnostic) => output.push(`${diagnostic.severity}: ${diagnostic.code} ${diagnostic.path} ${diagnostic.message}`));
       return 1;
     }
-    const result = await runLocal(parsed.manifest);
+    const runArgs = input === undefined ? rest : [input, ...rest];
+    const actionFlag = runArgs.indexOf('--actions');
+    let customActions: Record<string, CustomActionExecutor> | undefined;
+    const actionPath = actionFlag >= 0 ? runArgs[actionFlag + 1] : undefined;
+    if (actionPath !== undefined) {
+      const loaded = await import(resolve(actionPath));
+      const loadedActions: unknown = loaded.customActions ?? loaded.default;
+      customActions = loadedActions as Record<string, CustomActionExecutor>;
+    }
+    const result = await runLocal(parsed.manifest, {
+      ...(customActions === undefined ? {} : { customActions }),
+      ...(actionPath === undefined ? {} : { customActionModule: resolve(actionPath) }),
+    });
     output.push(`run: ${result.runId}`);
     output.push(`report: ${result.htmlReportPath}`);
     return result.status === 'passed' ? 0 : 1;
@@ -54,7 +92,7 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     return 0;
   }
 
-  output.push('Usage: testpilot manifest validate <file> | manifest generate <file> | run <file> | report <report.json>');
+  output.push('Usage: testpilot manifest validate <file> | manifest generate <file> | manifest migrate <file> [--approve] | manifest diff <before> <after> | run <file> [--actions <module>] | report <report.json>');
   return 2;
 }
 

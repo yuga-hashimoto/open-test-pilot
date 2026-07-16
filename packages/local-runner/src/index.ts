@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { generatePlaywright } from '@open-test-pilot/generator';
 import type { Manifest } from '@open-test-pilot/manifest-schema';
-import { executeManifest } from '@open-test-pilot/playwright-adapter';
+import { executeManifest, type CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
 import { renderReport } from '@open-test-pilot/report';
 import type { TestRunResult } from '@open-test-pilot/result-schema';
 
@@ -10,6 +10,8 @@ export interface RunLocalOptions {
   rootDir?: string;
   screenshotMode?: 'none' | 'failure-only' | 'after' | 'before-and-after';
   timeoutMs?: number;
+  customActions?: Record<string, CustomActionExecutor>;
+  customActionModule?: string;
 }
 
 export interface LocalRunResult extends TestRunResult {
@@ -24,7 +26,8 @@ export async function runLocal(manifest: Manifest, options: RunLocalOptions = {}
   const runDir = join(options.rootDir ?? '.testpilot/runs', runId);
   const generatedDir = join(runDir, 'generated-code');
   await mkdir(generatedDir, { recursive: true });
-  const generated = generatePlaywright(manifest);
+  const generatedCustomActionModule = options.customActionModule === undefined ? undefined : relative(dirname(join(generatedDir, `${manifest.id}.spec.ts`)), resolve(options.customActionModule));
+  const generated = generatePlaywright(manifest, generatedCustomActionModule === undefined ? {} : { customActionModule: generatedCustomActionModule.startsWith('.') ? generatedCustomActionModule : `./${generatedCustomActionModule}` });
   const generatedCodePath = join(generatedDir, `${manifest.id}.spec.ts`);
   const sourceMapPath = join(generatedDir, `${manifest.id}.map.json`);
   await writeFile(generatedCodePath, generated.code, 'utf8');
@@ -35,6 +38,7 @@ export async function runLocal(manifest: Manifest, options: RunLocalOptions = {}
     runId,
     ...(options.screenshotMode === undefined ? {} : { screenshotMode: options.screenshotMode }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.customActions === undefined ? {} : { customActions: options.customActions }),
   };
   const result = await executeManifest(manifest, executionOptions);
   result.generatedCodePath = `generated-code/${manifest.id}.spec.ts`;

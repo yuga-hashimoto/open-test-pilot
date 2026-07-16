@@ -26,12 +26,28 @@ describe('Manifest Schema', () => {
     expect(SupportedActions).toContain('api.request');
   });
 
-  it('defines reserved control nodes for future versions', () => {
+  it('accepts the documented semantic targets and schema version alias', () => {
+    const validator = createManifestValidator();
+    const result = validator({
+      schemaVersion: '1.0', id: 'semantic', name: 'Semantic', description: '', type: 'e2e', tags: [], priority: 'normal', preconditions: [], secrets: [], setup: [],
+      variables: [{ name: 'username', type: 'string', defaultValue: 'user@example.com' }],
+      steps: [{ id: 'login', title: 'Login', actions: [{ id: 'email', type: 'web.fill', target: { role: 'textbox', name: 'メールアドレス' }, value: '${var.username}' }] }],
+      cleanup: [], artifacts: { screenshots: 'after' }, runner: { minBrowsers: ['chromium'] }, permissions: { networkAccess: true }, source: { repository: 'local', path: 'test.yaml' }, generatedCode: { path: 'generated/test.spec.ts' },
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('defines control nodes for the executable DSL', () => {
     expect(ReservedControlNodes).toContain('if');
     expect(ReservedControlNodes).toContain('forEach');
     expect(ReservedControlNodes).toContain('retry');
     expect(ReservedControlNodes).toContain('parallel');
     expect(ReservedControlNodes).toContain('try');
+    expect(SupportedActions).toContain('control.if');
+    expect(SupportedActions).toContain('control.forEach');
+    expect(SupportedActions).toContain('control.retry');
+    expect(SupportedActions).toContain('control.parallel');
+    expect(SupportedActions).toContain('custom.action');
   });
 
   describe('Manifest type', () => {
@@ -279,6 +295,39 @@ describe('Manifest Schema', () => {
       // web.goto requires url
       const result = validator(invalid);
       expect(result.valid).toBe(false);
+    });
+
+    it('validates nested control nodes and custom action inputs', () => {
+      const complex = {
+        ...validManifest,
+        variables: [{ name: 'items', defaultValue: '["a","b"]' }],
+        steps: [{
+          id: 'complex',
+          actions: [{
+            id: 'loop',
+            type: 'control.forEach',
+            items: '${var.items}',
+            variable: 'item',
+            children: [{ id: 'custom', type: 'custom.action', actionType: 'company.record', input: { value: '${var.item}' } }],
+          }],
+        }],
+      };
+      expect(validator(complex)).toMatchObject({ valid: true, errors: null });
+    });
+
+    it('accepts function calls and timeout control nodes', () => {
+      const complex = {
+        ...validManifest,
+        functions: [{ id: 'cleanup', actions: [{ id: 'return', type: 'control.return' }] }],
+        steps: [{
+          id: 'controls',
+          actions: [
+            { id: 'call', type: 'control.call', functionName: 'cleanup', arguments: {} },
+            { id: 'timeout', type: 'control.timeout', timeoutMs: 1000, children: [] },
+          ],
+        }],
+      };
+      expect(validator(complex)).toMatchObject({ valid: true, errors: null });
     });
   });
 });

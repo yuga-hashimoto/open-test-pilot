@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import type { Manifest } from '@open-test-pilot/manifest-schema';
 import { executeManifest } from './index.js';
 
@@ -37,5 +39,90 @@ describe('executeManifest', () => {
     expect(result.status).toBe('failed');
     expect(result.steps[0]?.actions[0]?.error?.category).toBe('ENVIRONMENT_ERROR');
     expect(result.steps[0]?.actions[0]?.artifacts?.length).toBeGreaterThan(0);
+    expect(result.artifacts.map((artifact) => artifact.type)).toEqual(expect.arrayContaining(['url', 'cookies', 'local-storage', 'visible-elements']));
   }, 30_000);
+
+  it('executes if, forEach, retry, and try/finally control nodes in a real browser', async () => {
+    const server: Server = createServer((request, response) => {
+      if (request.url === '/api') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><html><body><h1 id="ready">Ready</h1></body></html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('test server did not bind');
+    const complexManifest: Manifest = {
+      ...manifest,
+      id: 'control-flow',
+      name: 'Control flow',
+      functions: [{ id: 'verify-ready', actions: [{ id: 'function-assert', type: 'web.expectVisible', selector: '#ready' }] }],
+      artifacts: { screenshots: 'none', traces: true },
+      steps: [{
+        id: 'controls',
+        actions: [
+          { id: 'open', type: 'web.goto', url: `http://127.0.0.1:${address.port}/` },
+          { id: 'api', type: 'api.request', method: 'GET', url: `http://127.0.0.1:${address.port}/api`, expectedStatus: 200, jsonAssertions: { ok: true }, outputs: { ok: '$.ok' } },
+          { id: 'api-branch', type: 'control.if', condition: '${steps.api.ok}', children: [{ id: 'api-visible', type: 'web.expectVisible', selector: '#ready' }], elseChildren: [{ id: 'api-wrong', type: 'web.expectVisible', selector: '#missing' }] },
+          { id: 'branch', type: 'control.if', condition: 'true', children: [{ id: 'visible-in-branch', type: 'web.expectVisible', selector: '#ready' }], elseChildren: [{ id: 'wrong-branch', type: 'web.expectVisible', selector: '#missing' }] },
+          { id: 'loop', type: 'control.forEach', items: '["a", "b"]', variable: 'item', children: [{ id: 'visible-in-loop', type: 'web.expectVisible', selector: '#ready' }] },
+          { id: 'retry', type: 'control.retry', maxAttempts: 2, children: [{ id: 'assert-ready', type: 'web.expectText', selector: '#ready', expectedText: 'Ready' }] },
+          { id: 'finally', type: 'control.try', children: [{ id: 'try-visible', type: 'web.expectVisible', selector: '#ready' }], finally: [{ id: 'cleanup-shot', type: 'web.screenshot', name: 'control-finally.png' }] },
+          { id: 'switch', type: 'control.switch', value: 'ready', cases: { ready: [{ id: 'switch-ready', type: 'web.expectVisible', selector: '#ready' }] } },
+          { id: 'for', type: 'control.for', variable: 'index', from: 0, to: 2, step: 1, children: [{ id: 'for-visible', type: 'web.expectVisible', selector: '#ready' }] },
+          { id: 'while', type: 'control.while', condition: 'false', maxAttempts: 1, children: [{ id: 'while-never', type: 'web.expectVisible', selector: '#missing' }] },
+          { id: 'timeout', type: 'control.timeout', timeoutMs: 5_000, children: [{ id: 'timeout-visible', type: 'web.expectVisible', selector: '#ready' }] },
+          { id: 'call', type: 'control.call', functionName: 'verify-ready', arguments: {} },
+        ],
+      }],
+    };
+    try {
+      const result = await executeManifest(complexManifest, { outputDir: '.testpilot/control-flow', screenshotMode: 'none' });
+      expect(result.status).toBe('passed');
+      expect(result.steps[0]?.actions.map((action) => action.actionId)).toEqual(['open', 'api', 'api-branch', 'branch', 'loop', 'retry', 'finally', 'switch', 'for', 'while', 'timeout', 'call']);
+      expect(result.steps[0]?.actions.every((action) => action.status === 'passed')).toBe(true);
+      expect(result.artifacts.some((artifact) => artifact.type === 'trace')).toBe(true);
+      expect(result.artifacts.some((artifact) => artifact.type === 'screenshot' && artifact.path.endsWith('control-finally.png'))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+    }
+  }, 30_000);
+
+  it.each(['firefox', 'webkit'] as const)('executes the same manifest in %s', async (browser) => {
+    const server: Server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><html><body><h1>Cross-browser</h1></body></html>');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('test server did not bind');
+    try {
+      const result = await executeManifest({ ...manifest, id: `browser-${browser}`, steps: [{ id: 'browser', actions: [{ id: 'open', type: 'web.goto', url: `http://127.0.0.1:${address.port}/` }, { id: 'heading', type: 'web.expectText', target: { role: 'heading', name: 'Cross-browser' }, expectedText: 'Cross-browser' }] }] }, { outputDir: `.testpilot/browser-${browser}`, browser, screenshotMode: 'none' });
+      expect(result.status).toBe('passed');
+      expect(result.metadata.browser.toLowerCase()).toBe(browser);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+    }
+  }, 30_000);
+
+  it('executes a registered custom action and records its output context', async () => {
+    let received: Record<string, unknown> | undefined;
+    let artifactId: string | undefined;
+    const result = await executeManifest({ ...manifest, id: 'custom-flow', steps: [{ id: 'custom', actions: [{ id: 'record', type: 'custom.action', actionType: 'company.record', input: { value: 'hello' } }] }] }, {
+      outputDir: '.testpilot/custom-flow',
+      customActions: {
+        'company.record': {
+          async execute(context, input) { received = input; artifactId = await context.writeArtifact('custom.txt', new TextEncoder().encode('custom artifact'), 'text/plain'); return { recorded: true }; },
+        },
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(received).toEqual({ value: 'hello' });
+    expect(artifactId).toBeDefined();
+    expect(await readFile('.testpilot/custom-flow/custom.txt', 'utf8')).toBe('custom artifact');
+    expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'custom', path: 'custom.txt' })]));
+  });
 });

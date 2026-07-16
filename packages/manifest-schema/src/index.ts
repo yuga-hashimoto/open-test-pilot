@@ -11,6 +11,23 @@ export const SupportedActions = [
   'web.expectText',
   'web.screenshot',
   'api.request',
+  'control.if',
+  'control.switch',
+  'control.for',
+  'control.forEach',
+  'control.while',
+  'control.retry',
+  'control.try',
+  'control.parallel',
+  'control.race',
+  'control.waitUntil',
+  'control.break',
+  'control.continue',
+  'control.return',
+  'control.set',
+  'control.call',
+  'control.timeout',
+  'custom.action',
 ] as const;
 
 export const ReservedControlNodes = [
@@ -19,12 +36,15 @@ export const ReservedControlNodes = [
   'retry',
   'parallel',
   'try',
+  'call',
+  'timeout',
 ] as const;
 
 export type ManifestActionType = (typeof SupportedActions)[number];
 
 export interface ManifestVariable {
   name: string;
+  type?: 'string' | 'number' | 'boolean' | 'object' | 'array';
   defaultValue?: string;
 }
 
@@ -40,16 +60,50 @@ export interface ManifestAction {
   name?: string;
   url?: string;
   selector?: string;
+  target?: { role?: string; name?: string; label?: string; text?: string; testId?: string; css?: string };
   value?: string;
   expectedText?: string;
   method?: string;
   headers?: Record<string, string>;
   body?: unknown;
+  expectedStatus?: number | number[];
+  jsonAssertions?: Record<string, unknown>;
+  condition?: string;
+  items?: string | unknown[];
+  variable?: string;
+  maxAttempts?: number;
+  backoffMs?: number;
+  timeoutMs?: number;
+  pollMs?: number;
+  actionType?: string;
+  input?: Record<string, unknown>;
+  outputs?: Record<string, string>;
+  children?: ManifestAction[];
+  elseChildren?: ManifestAction[];
+  branches?: ManifestAction[][];
+  catch?: ManifestAction[];
+  finally?: ManifestAction[];
+  cases?: Record<string, ManifestAction[]>;
+  defaultChildren?: ManifestAction[];
+  from?: number;
+  to?: number;
+  step?: number;
+  functionName?: string;
+  arguments?: Record<string, unknown>;
+  customCodeRef?: string;
+  assertions?: Array<Record<string, unknown>>;
+}
+
+export interface ManifestFunction {
+  id: string;
+  parameters?: string[];
+  actions: ManifestAction[];
 }
 
 export interface ManifestStep {
   id: string;
   description?: string;
+  title?: string;
   actions: ManifestAction[];
   output?: Record<string, string>;
 }
@@ -68,11 +122,13 @@ export interface Manifest {
   setup: ManifestStep[];
   steps: ManifestStep[];
   cleanup: ManifestStep[];
+  functions?: ManifestFunction[];
   artifacts: { screenshots: string; traces?: boolean };
   runner: { minBrowsers: string[] };
   permissions: { networkAccess: boolean; fileSystem?: boolean };
   source: { repository: string; path: string };
   generatedCode: { path: string };
+  customCode?: Array<{ id: string; path: string; permissions?: string[] }>;
 }
 
 export interface ValidationResult {
@@ -109,7 +165,7 @@ export const manifestJsonSchema = {
     'generatedCode',
   ],
   properties: {
-    schemaVersion: { const: DefaultManifestSchemaVersion },
+    schemaVersion: { enum: [DefaultManifestSchemaVersion, '1.0'] },
     id: { type: 'string' },
     name: { type: 'string' },
     description: { type: 'string' },
@@ -124,6 +180,7 @@ export const manifestJsonSchema = {
         required: ['name'],
         properties: {
           name: { type: 'string' },
+          type: { enum: ['string', 'number', 'boolean', 'object', 'array'] },
           defaultValue: { type: 'string' },
         },
         additionalProperties: false,
@@ -147,6 +204,19 @@ export const manifestJsonSchema = {
     setup: { type: 'array', items: { $ref: '#/$defs/step' } },
     steps: { type: 'array', items: { $ref: '#/$defs/step' } },
     cleanup: { type: 'array', items: { $ref: '#/$defs/step' } },
+    functions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'actions'],
+        properties: {
+          id: { type: 'string' },
+          parameters: { type: 'array', items: { type: 'string' } },
+          actions: { type: 'array', items: { $ref: '#/$defs/action' } },
+        },
+        additionalProperties: false,
+      },
+    },
     artifacts: {
       type: 'object',
       required: ['screenshots'],
@@ -190,6 +260,15 @@ export const manifestJsonSchema = {
       },
       additionalProperties: false,
     },
+    customCode: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'path'],
+        properties: { id: { type: 'string' }, path: { type: 'string' }, permissions: { type: 'array', items: { type: 'string' } } },
+        additionalProperties: false,
+      },
+    },
   },
   additionalProperties: false,
   $defs: {
@@ -199,6 +278,7 @@ export const manifestJsonSchema = {
       properties: {
         id: { type: 'string' },
         description: { type: 'string' },
+        title: { type: 'string' },
         actions: {
           type: 'array',
           items: { $ref: '#/$defs/action' },
@@ -222,11 +302,42 @@ export const manifestJsonSchema = {
         name: { type: 'string' },
         url: { type: 'string' },
         selector: { type: 'string' },
+        target: {
+          type: 'object',
+          properties: { role: { type: 'string' }, name: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' }, testId: { type: 'string' }, css: { type: 'string' } },
+          additionalProperties: false,
+        },
         value: { type: 'string' },
         expectedText: { type: 'string' },
         method: { type: 'string' },
         headers: { type: 'object' },
         body: {},
+        expectedStatus: { anyOf: [{ type: 'integer' }, { type: 'array', items: { type: 'integer' } }] },
+        jsonAssertions: { type: 'object' },
+        condition: { type: 'string' },
+        items: {},
+        variable: { type: 'string' },
+        maxAttempts: { type: 'integer', minimum: 1 },
+        backoffMs: { type: 'integer', minimum: 0 },
+        timeoutMs: { type: 'integer', minimum: 1 },
+        pollMs: { type: 'integer', minimum: 1 },
+        actionType: { type: 'string' },
+        input: { type: 'object' },
+        outputs: { type: 'object', additionalProperties: { type: 'string' } },
+        children: { type: 'array', items: { $ref: '#/$defs/action' } },
+        elseChildren: { type: 'array', items: { $ref: '#/$defs/action' } },
+        branches: { type: 'array', items: { type: 'array', items: { $ref: '#/$defs/action' } } },
+        catch: { type: 'array', items: { $ref: '#/$defs/action' } },
+        finally: { type: 'array', items: { $ref: '#/$defs/action' } },
+        cases: { type: 'object', additionalProperties: { type: 'array', items: { $ref: '#/$defs/action' } } },
+        defaultChildren: { type: 'array', items: { $ref: '#/$defs/action' } },
+        from: { type: 'integer' },
+        to: { type: 'integer' },
+        step: { type: 'integer', minimum: 1 },
+        functionName: { type: 'string' },
+        arguments: { type: 'object' },
+        customCodeRef: { type: 'string' },
+        assertions: { type: 'array', items: { type: 'object' } },
       },
       additionalProperties: false,
       allOf: [
@@ -236,23 +347,31 @@ export const manifestJsonSchema = {
         },
         {
           if: { properties: { type: { const: 'web.fill' } } },
-          then: { required: ['selector', 'value'] },
+          then: { required: ['value'], anyOf: [{ required: ['selector'] }, { required: ['target'] }] },
         },
         {
           if: { properties: { type: { const: 'web.click' } } },
-          then: { required: ['selector'] },
+          then: { anyOf: [{ required: ['selector'] }, { required: ['target'] }] },
         },
         {
           if: { properties: { type: { const: 'web.expectVisible' } } },
-          then: { required: ['selector'] },
+          then: { anyOf: [{ required: ['selector'] }, { required: ['target'] }] },
         },
         {
           if: { properties: { type: { const: 'web.expectText' } } },
-          then: { required: ['selector', 'expectedText'] },
+          then: { required: ['expectedText'], anyOf: [{ required: ['selector'] }, { required: ['target'] }] },
         },
         {
           if: { properties: { type: { const: 'api.request' } } },
           then: { required: ['method', 'url'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.call' } } },
+          then: { required: ['functionName'] },
+        },
+        {
+          if: { properties: { type: { const: 'control.timeout' } } },
+          then: { required: ['timeoutMs', 'children'] },
         },
       ],
     },
