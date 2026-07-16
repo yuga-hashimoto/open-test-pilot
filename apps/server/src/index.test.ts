@@ -88,7 +88,9 @@ describe('OpenTestPilot server API', () => {
     expect(run.json<{ runId: string; status: string }>().status).toBe('queued');
     const openapi = await app.inject({ method: 'GET', url: '/openapi.json' });
     expect(openapi.statusCode).toBe(200);
-    expect(openapi.json<{ paths: Record<string, unknown> }>().paths['/v1/organizations/{organizationId}/runs']).toBeDefined();
+    const paths = openapi.json<{ paths: Record<string, Record<string, { responses?: unknown }>> }>().paths;
+    expect(paths['/v1/organizations/{organizationId}/runs']).toBeDefined();
+    for (const path of Object.values(paths)) for (const operation of Object.values(path)) expect(operation.responses).toBeDefined();
     await app.close();
   });
 
@@ -187,6 +189,32 @@ describe('OpenTestPilot server API', () => {
     await app.inject({ method: 'POST', url: `/v1/jobs/${jobId}/complete`, headers: { 'x-organization-id': organizationId }, payload: { status: 'passed' } });
     const completed = await app.inject({ method: 'GET', url: `/v1/runs/${runId}`, headers: { 'x-organization-id': organizationId } });
     expect(completed.json<{ status: string }>().status).toBe('passed');
+    await app.close();
+  });
+
+  it('stores runner result evidence for failure and step APIs', async () => {
+    const app = buildServer();
+    const organizationId = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Results' } })).json<{ id: string }>().id;
+    const projectId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Store' } })).json<{ id: string }>().id;
+    const testId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } })).json<{ id: string }>().id;
+    const runId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } })).json<{ runId: string }>().runId;
+    const runnerId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runners`, headers: { 'x-organization-id': organizationId }, payload: { name: 'runner', capabilities: { browsers: ['chromium'], maxConcurrency: 1 } } })).json<{ runnerId: string }>().runnerId;
+    const jobId = (await app.inject({ method: 'POST', url: `/v1/runners/${runnerId}/lease`, headers: { 'x-organization-id': organizationId } })).json<{ job: { jobId: string } }>().job.jobId;
+    const completion = await app.inject({ method: 'POST', url: `/v1/jobs/${jobId}/complete`, headers: { 'x-organization-id': organizationId }, payload: {
+      status: 'failed',
+      result: {
+        failures: [{ actionId: 'assert-title', message: 'Expected Welcome', category: 'PRODUCT_DEFECT' }],
+        steps: [{ stepId: 'login', status: 'failed', actions: [{ actionId: 'assert-title', status: 'failed' }] }],
+      },
+      },
+    });
+    expect(completion.statusCode).toBe(200);
+    const failures = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/failures`, headers: { 'x-organization-id': organizationId } });
+    expect(failures.statusCode).toBe(200);
+    expect(failures.json<{ failures: Array<{ actionId: string }> }>().failures[0]?.actionId).toBe('assert-title');
+    const step = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/steps/login`, headers: { 'x-organization-id': organizationId } });
+    expect(step.statusCode).toBe(200);
+    expect(step.json<{ stepId: string }>().stepId).toBe('login');
     await app.close();
   });
 

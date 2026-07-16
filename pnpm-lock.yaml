@@ -179,6 +179,9 @@ importers:
 
   packages/local-runner:
     dependencies:
+      '@open-test-pilot/appium-adapter':
+        specifier: workspace:*
+        version: link:../appium-adapter
       '@open-test-pilot/generator':
         specifier: workspace:*
         version: link:../generator

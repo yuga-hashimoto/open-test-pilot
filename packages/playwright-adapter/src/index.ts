@@ -311,6 +311,14 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       context.stepOutputs[action.id] = await executor.execute({ runId: options.runId ?? 'local-run', getSecret: async (name) => process.env[name], writeArtifact: context.writeArtifact }, (resolveAny(action.input ?? {}, manifest, context) as Record<string, unknown>));
       return;
     }
+    case 'mobile.launch':
+    case 'mobile.tap':
+    case 'mobile.fill':
+    case 'mobile.expectVisible':
+    case 'mobile.expectText':
+    case 'mobile.screenshot':
+    case 'mobile.back':
+      throw new Error(`Mobile action '${action.type}' requires the Appium execution path. Use runLocal with a mobile manifest or call executeMobileManifest from @open-test-pilot/appium-adapter.`);
     default:
       throw new Error(`Unsupported action type: ${action.type}`);
   }

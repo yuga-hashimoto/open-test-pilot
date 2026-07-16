@@ -1,4 +1,4 @@
-import type { Manifest, ManifestAction, ManifestStep } from '@open-test-pilot/manifest-schema';
+import type { Manifest, ManifestAction, ManifestMobileCapabilities, ManifestStep } from '@open-test-pilot/manifest-schema';
 
 export interface SourceMapNode {
   nodeId: string;
@@ -20,12 +20,27 @@ export interface GeneratedPlaywright {
   fileName: string;
 }
 
+export type GeneratedMobileAppium = GeneratedPlaywright;
+
 export interface GeneratePlaywrightOptions {
   /** Module exporting the custom action registry used by the generated test. */
   customActionModule?: string;
 }
 
 const generatorVersion = '0.1.0';
+
+function mobileCapabilitiesLiteral(capabilities: ManifestMobileCapabilities): string {
+  const entries: string[] = [
+    `platformName: ${quote(capabilities.platform)}`,
+    `'appium:deviceName': ${quote(capabilities.deviceName)}`,
+  ];
+  if (capabilities.platformVersion !== undefined) entries.push(`'appium:platformVersion': ${quote(capabilities.platformVersion)}`);
+  if (capabilities.app !== undefined) entries.push(`'appium:app': ${quote(capabilities.app)}`);
+  if (capabilities.appPackage !== undefined) entries.push(`'appium:appPackage': ${quote(capabilities.appPackage)}`);
+  if (capabilities.appActivity !== undefined) entries.push(`'appium:appActivity': ${quote(capabilities.appActivity)}`);
+  entries.push(`'appium:automationName': ${quote(capabilities.automationName ?? (capabilities.platform === 'android' ? 'UiAutomator2' : 'XCUITest'))}`);
+  return `{ ${entries.join(', ')} }`;
+}
 
 function quote(value: string): string {
   return `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\n', '\\n')}'`;
@@ -309,6 +324,65 @@ export function generatePlaywright(manifest: Manifest, options: GeneratePlaywrig
       generatorVersion,
       nodes: sourceMap,
     },
+    fileName: manifest.generatedCode.path,
+  };
+}
+
+function mobileActionLines(action: ManifestAction, indent: string): string[] {
+  const selector = quote(action.selector ?? '');
+  switch (action.type) {
+    case 'mobile.launch':
+      return [`${indent}// mobile.launch is represented by the WebdriverIO session above`];
+    case 'mobile.tap':
+      return [`${indent}await (await browser.$(${selector})).click();`];
+    case 'mobile.fill':
+      return [`${indent}await (await browser.$(${selector})).setValue(${quote(action.value ?? '')});`];
+    case 'mobile.expectVisible':
+      return [`${indent}await (await browser.$(${selector})).waitForDisplayed();`];
+    case 'mobile.expectText':
+      return [`${indent}assert.equal(await (await browser.$(${selector})).getText(), ${quote(action.expectedText ?? '')});`];
+    case 'mobile.screenshot':
+      return [`${indent}await browser.saveScreenshot(${quote(`artifacts/${action.name ?? action.id}.png`)});`];
+    case 'mobile.back':
+      return [`${indent}await browser.back();`];
+    default:
+      throw new Error(`Unsupported mobile action type: ${action.type}`);
+  }
+}
+
+function appendMobileStep(lines: string[], sourceMap: SourceMapNode[], step: ManifestStep): void {
+  const startLine = lines.length + 1;
+  lines.push(`  // testpilot:step ${step.id}`);
+  for (const action of step.actions) {
+    const actionStart = lines.length + 1;
+    lines.push(`  // testpilot:action ${action.id}`);
+    lines.push(...mobileActionLines(action, '  '));
+    sourceMap.push({ nodeId: action.id, kind: 'action', startLine: actionStart, endLine: lines.length });
+  }
+  sourceMap.push({ nodeId: step.id, kind: 'step', startLine, endLine: lines.length });
+}
+
+/** Generate an independently runnable WebdriverIO/Appium TypeScript test. */
+export function generateMobileAppium(manifest: Manifest): GeneratedMobileAppium {
+  const launch = [...manifest.setup, ...manifest.steps, ...manifest.cleanup]
+    .flatMap((step) => step.actions)
+    .find((action) => action.type === 'mobile.launch');
+  if (launch?.capabilities === undefined) throw new Error('Mobile Manifest requires a mobile.launch action with capabilities');
+  const serverUrl = launch.capabilities.serverUrl ?? 'http://127.0.0.1:4723';
+  const parsed = new URL(serverUrl);
+  const lines: string[] = [
+    "import assert from 'node:assert/strict';",
+    "import { remote } from 'webdriverio';",
+    '',
+    `const browser = await remote({ protocol: ${quote(parsed.protocol.replace(':', ''))}, hostname: ${quote(parsed.hostname)}, port: ${Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80))}, path: ${quote(parsed.pathname || '/')}, capabilities: ${mobileCapabilitiesLiteral(launch.capabilities)} });`,
+    'try {',
+  ];
+  const sourceMap: SourceMapNode[] = [];
+  for (const step of [...manifest.setup, ...manifest.steps, ...manifest.cleanup]) appendMobileStep(lines, sourceMap, step);
+  lines.push('} finally {', '  await browser.deleteSession();', '}', '');
+  return {
+    code: lines.join('\n'),
+    sourceMap: { version: 1, manifestId: manifest.id, generatorVersion, nodes: sourceMap },
     fileName: manifest.generatedCode.path,
   };
 }

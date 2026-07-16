@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "manifestId": "android-settings",
+  "generatorVersion": "0.1.0",
+  "nodes": [
+    {
+      "nodeId": "launch",
+      "kind": "action",
+      "startLine": 7,
+      "endLine": 8
+    },
+    {
+      "nodeId": "network",
+      "kind": "action",
+      "startLine": 9,
+      "endLine": 10
+    },
+    {
+      "nodeId": "screenshot",
+      "kind": "action",
+      "startLine": 11,
+      "endLine": 12
+    },
+    {
+      "nodeId": "settings",
+      "kind": "step",
+      "startLine": 6,
+      "endLine": 12
+    }
+  ]
+}

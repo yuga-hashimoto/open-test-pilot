@@ -12,6 +12,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@open-test-pilot/appium-adapter": "workspace:*",
     "@open-test-pilot/generator": "workspace:*",
     "@open-test-pilot/manifest-schema": "workspace:*",
     "@open-test-pilot/playwright-adapter": "workspace:*",

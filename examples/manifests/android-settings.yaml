@@ -1,0 +1,43 @@
+schemaVersion: "1.0.0"
+id: android-settings
+name: Android Settings smoke
+description: Verify the Android Settings screen through Appium
+type: mobile
+tags:
+  - android
+  - smoke
+priority: normal
+preconditions: []
+variables: []
+secrets: []
+setup: []
+steps:
+  - id: settings
+    title: Verify Settings
+    actions:
+      - id: launch
+        type: mobile.launch
+        capabilities:
+          platform: android
+          deviceName: emulator-5554
+          appPackage: com.android.settings
+          appActivity: .Settings
+      - id: network
+        type: mobile.expectText
+        selector: '//android.widget.TextView[@text="Network & internet"]'
+        expectedText: Network & internet
+      - id: screenshot
+        type: mobile.screenshot
+        name: settings
+cleanup: []
+artifacts:
+  screenshots: after
+runner:
+  minBrowsers: []
+permissions:
+  networkAccess: false
+source:
+  repository: local
+  path: examples/manifests/android-settings.yaml
+generatedCode:
+  path: generated/android-settings.spec.ts

@@ -31,4 +31,28 @@ describe('runLocal', () => {
     expect(result.htmlReportPath).toMatch(/index\.html$/);
     expect(result.generatedCodePath).toMatch(/missing-target\.spec\.ts$/);
   }, 30_000);
+
+  it('executes a mobile Manifest through the Appium driver boundary', async () => {
+    const result = await runLocal({
+      ...manifest,
+      id: 'mobile-local',
+      name: 'Mobile local',
+      type: 'mobile',
+      steps: [{ id: 'mobile-step', actions: [
+        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554', appPackage: 'com.example', appActivity: '.MainActivity' } },
+        { id: 'tap', type: 'mobile.tap', selector: 'id=login' },
+        { id: 'assert', type: 'mobile.expectText', selector: 'id=welcome', expectedText: 'Welcome' },
+      ] }],
+      generatedCode: { path: 'generated/mobile-local.spec.ts' },
+    }, {
+      rootDir: '.testpilot/mobile-local',
+      mobileDriver: {
+        async $() { return { async click() {}, async setValue() {}, async getText() { return 'Welcome'; }, async waitForDisplayed() {} }; },
+        async deleteSession() {},
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(result.steps[0]?.actions.map((action) => action.actionId)).toEqual(['launch', 'tap', 'assert']);
+    expect(result.artifacts.some((artifact) => artifact.type === 'generated-code')).toBe(true);
+  }, 30_000);
 });

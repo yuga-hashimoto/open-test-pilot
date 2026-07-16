@@ -43,6 +43,24 @@ describe('testpilot CLI', () => {
     expect(output.join('\n')).toContain('valid');
   });
 
+  it('generates WebdriverIO code for a mobile manifest', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-mobile-'));
+    const manifestPath = join(directory, 'mobile.yaml');
+    await writeFile(manifestPath, manifest.replace('id: cli-test', 'id: cli-mobile').replace('name: CLI test', 'name: CLI mobile').replace('type: e2e', 'type: mobile').replace('minBrowsers: [chromium]', 'minBrowsers: []').replace('steps: []', `steps:
+  - id: settings
+    actions:
+      - id: launch
+        type: mobile.launch
+        capabilities:
+          platform: android
+          deviceName: emulator-5554
+      - id: shot
+        type: mobile.screenshot
+        name: settings`).replace('generated/cli-test.spec.ts', 'generated/cli-mobile.spec.ts'), 'utf8');
+    expect(await runCli(['manifest', 'generate', manifestPath], [])).toBe(0);
+    expect(await readFile(join(directory, 'generated/cli-mobile.spec.ts'), 'utf8')).toContain("import { remote } from 'webdriverio';");
+  });
+
   it('returns a non-zero exit code for invalid manifests', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-invalid-'));
     const manifestPath = join(directory, 'invalid.yaml');

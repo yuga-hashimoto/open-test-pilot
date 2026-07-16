@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Manifest } from '@open-test-pilot/manifest-schema';
-import { generatePlaywright } from './index.js';
+import { generateMobileAppium, generatePlaywright } from './index.js';
 
 const manifest: Manifest = {
   schemaVersion: '1.0.0',
@@ -124,5 +124,31 @@ describe('generatePlaywright', () => {
     expect(output.code).toContain('response_create');
     expect(output.code).toContain("resolveValue('${steps.api.email}')");
     expect(output.code).toContain('customActions[type]');
+  });
+});
+
+describe('generateMobileAppium', () => {
+  it('generates standard WebdriverIO code and source mappings from mobile Manifest actions', () => {
+    const output = generateMobileAppium({
+      schemaVersion: '1.0.0', id: 'android-login', name: 'Android login', description: '', type: 'mobile', tags: [], priority: 'normal',
+      preconditions: [], variables: [], secrets: [], setup: [], steps: [{ id: 'login', actions: [
+        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554', appPackage: 'com.example', appActivity: '.MainActivity' } },
+        { id: 'tap', type: 'mobile.tap', selector: 'id=com.example:id/login' },
+        { id: 'fill', type: 'mobile.fill', selector: 'id=com.example:id/email', value: 'user@example.com' },
+        { id: 'assert', type: 'mobile.expectText', selector: 'id=com.example:id/welcome', expectedText: 'Welcome' },
+        { id: 'shot', type: 'mobile.screenshot', name: 'welcome' },
+        { id: 'back', type: 'mobile.back' },
+      ] }], cleanup: [], artifacts: { screenshots: 'after' }, runner: { minBrowsers: [] }, permissions: { networkAccess: false },
+      source: { repository: 'local', path: 'mobile.yaml' }, generatedCode: { path: 'generated/android-login.spec.ts' },
+    });
+    expect(output.code).toContain("import { remote } from 'webdriverio';");
+    expect(output.code).toContain("'appium:deviceName': 'emulator-5554'");
+    expect(output.code).toContain("await (await browser.$('id=com.example:id/login')).click();");
+    expect(output.code).toContain("await browser.saveScreenshot('artifacts/welcome.png');");
+    expect(output.code).toContain('deleteSession');
+    expect(output.sourceMap.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: 'login', kind: 'step' }),
+      expect.objectContaining({ nodeId: 'assert', kind: 'action' }),
+    ]));
   });
 });

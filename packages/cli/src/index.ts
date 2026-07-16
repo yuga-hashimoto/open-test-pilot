@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { generatePlaywright } from '@open-test-pilot/generator';
+import { generateMobileAppium, generatePlaywright } from '@open-test-pilot/generator';
 import { runLocal } from '@open-test-pilot/local-runner';
 import type { CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
 import { diffManifests, migrateManifest, previewMigration } from '@open-test-pilot/manifest-migrator';
@@ -24,7 +24,8 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
       output.push(`valid: ${input}`);
       return 0;
     }
-    const generated = generatePlaywright(parsed.manifest);
+    const isMobile = [...parsed.manifest.setup, ...parsed.manifest.steps, ...parsed.manifest.cleanup].some((step) => step.actions.some((action) => action.type.startsWith('mobile.')));
+    const generated = isMobile ? generateMobileAppium(parsed.manifest) : generatePlaywright(parsed.manifest);
     const generatedPath = isAbsolute(parsed.manifest.generatedCode.path)
       ? parsed.manifest.generatedCode.path
       : resolve(dirname(input), parsed.manifest.generatedCode.path);

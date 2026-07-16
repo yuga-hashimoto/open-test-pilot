@@ -135,6 +135,7 @@ export class InMemoryTenantRepository implements TenantRepository {
 
 interface OrganizationParams { organizationId: string }
 interface RunParams { runId: string }
+interface StepParams { runId: string; stepId: string }
 interface ResourceParams { id: string }
 interface CreateOrganizationBody { name: string }
 interface CreateProjectBody { name: string }
@@ -147,7 +148,7 @@ interface CreateRunnerBody { name: string; capabilities: RunnerCapabilities }
 interface CreateJobBody { job: Job }
 interface RunnerParams { runnerId: string }
 interface JobParams { jobId: string }
-interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled' }
+interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled'; result?: { failures?: unknown[]; steps?: unknown[]; [key: string]: unknown } }
 interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
 interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
@@ -192,6 +193,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const changeRequests = new Map<string, ChangeRequestRecord>();
   const repairs = new Map<string, RepairRecord>();
   const pullRequests = new Map<string, PullRequestRecord>();
+  const runResults = new Map<string, { failures: unknown[]; steps: unknown[]; [key: string]: unknown }>();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
@@ -370,14 +372,15 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const run = await repository.getRun(request.params.runId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
-    return reply.send({ runId: run.id, failures: [] });
+    return reply.send({ runId: run.id, failures: runResults.get(run.id)?.failures ?? [] });
   });
 
-  app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
+  app.get<{ Params: StepParams; Headers: TenantHeaders }>('/v1/runs/:runId/steps/:stepId', async (request, reply) => {
     const run = await repository.getRun(request.params.runId);
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
-    return reply.code(404).send({ error: 'step result not found' });
+    const step = runResults.get(run.id)?.steps.find((candidate) => candidate !== null && typeof candidate === 'object' && (candidate as { stepId?: unknown }).stepId === request.params.stepId);
+    return step === undefined ? reply.code(404).send({ error: 'step result not found' }) : reply.send(step);
   });
 
   app.get<{ Params: { runId: string; baselineRunId: string }; Headers: TenantHeaders }>('/v1/runs/:runId/compare/:baselineRunId', async (request, reply) => {
@@ -479,6 +482,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (status !== 'passed' && status !== 'failed' && status !== 'cancelled') return reply.code(400).send({ error: 'status must be passed, failed, or cancelled' });
     const result = await executionQueue.complete(tenantId(request) ?? '', request.params.jobId, status);
     if (result === undefined) return reply.code(404).send({ error: 'leased job not found' });
+    if (request.body?.result !== undefined) runResults.set(result.runId, { ...request.body.result, failures: request.body.result.failures ?? [], steps: request.body.result.steps ?? [] });
     await repository.updateRun(result.runId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() });
     return reply.send({ jobId: result.jobId, status: result.status });
   });
@@ -508,7 +512,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.code(202).send({ accepted: true, deliveryId, event: request.headers['x-github-event'] ?? 'unknown' });
   });
 
-  app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: {
+  app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: Object.fromEntries(Object.entries({
     '/v1/organizations': { post: {} },
     '/v1/organizations/{organizationId}': { get: {} },
     '/v1/organizations/{organizationId}/projects': { post: {} },
@@ -538,7 +542,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/jobs/{jobId}/complete': { post: {} },
     '/v1/organizations/{organizationId}/schedules': { get: {}, post: {} },
     '/v1/webhooks/github': { post: {} },
-  } }));
+  }).map(([path, operations]) => [path, Object.fromEntries(Object.entries(operations).map(([method, operation]) => [method, { ...(operation as Record<string, unknown>), responses: { '200': { description: 'Successful response' } } }]))])) }));
 
   return app;
 }

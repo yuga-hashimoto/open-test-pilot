@@ -11,6 +11,13 @@ export const SupportedActions = [
   'web.expectText',
   'web.screenshot',
   'api.request',
+  'mobile.launch',
+  'mobile.tap',
+  'mobile.fill',
+  'mobile.expectVisible',
+  'mobile.expectText',
+  'mobile.screenshot',
+  'mobile.back',
   'control.if',
   'control.switch',
   'control.for',
@@ -54,12 +61,24 @@ export interface ManifestSecretRef {
   reference: string;
 }
 
+export interface ManifestMobileCapabilities {
+  platform: 'android' | 'ios';
+  deviceName: string;
+  platformVersion?: string;
+  app?: string;
+  appPackage?: string;
+  appActivity?: string;
+  automationName?: 'UiAutomator2' | 'XCUITest';
+  serverUrl?: string;
+}
+
 export interface ManifestAction {
   id: string;
   type: string;
   name?: string;
   url?: string;
   selector?: string;
+  capabilities?: ManifestMobileCapabilities;
   target?: { role?: string; name?: string; label?: string; text?: string; testId?: string; css?: string };
   value?: string;
   expectedText?: string;
@@ -302,6 +321,21 @@ export const manifestJsonSchema = {
         name: { type: 'string' },
         url: { type: 'string' },
         selector: { type: 'string' },
+        capabilities: {
+          type: 'object',
+          required: ['platform', 'deviceName'],
+          properties: {
+            platform: { enum: ['android', 'ios'] },
+            deviceName: { type: 'string' },
+            platformVersion: { type: 'string' },
+            app: { type: 'string' },
+            appPackage: { type: 'string' },
+            appActivity: { type: 'string' },
+            automationName: { enum: ['UiAutomator2', 'XCUITest'] },
+            serverUrl: { type: 'string', pattern: '^https?://[^\\s]+$' },
+          },
+          additionalProperties: false,
+        },
         target: {
           type: 'object',
           properties: { role: { type: 'string' }, name: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' }, testId: { type: 'string' }, css: { type: 'string' } },
@@ -364,6 +398,22 @@ export const manifestJsonSchema = {
         {
           if: { properties: { type: { const: 'api.request' } } },
           then: { required: ['method', 'url'] },
+        },
+        {
+          if: { properties: { type: { const: 'mobile.launch' } } },
+          then: { required: ['capabilities'] },
+        },
+        {
+          if: { properties: { type: { enum: ['mobile.tap', 'mobile.expectVisible'] } } },
+          then: { required: ['selector'] },
+        },
+        {
+          if: { properties: { type: { const: 'mobile.fill' } } },
+          then: { required: ['selector', 'value'] },
+        },
+        {
+          if: { properties: { type: { const: 'mobile.expectText' } } },
+          then: { required: ['selector', 'expectedText'] },
         },
         {
           if: { properties: { type: { const: 'control.call' } } },

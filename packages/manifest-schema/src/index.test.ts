@@ -24,6 +24,31 @@ describe('Manifest Schema', () => {
     expect(SupportedActions).toContain('web.expectText');
     expect(SupportedActions).toContain('web.screenshot');
     expect(SupportedActions).toContain('api.request');
+    expect(SupportedActions).toContain('mobile.launch');
+    expect(SupportedActions).toContain('mobile.tap');
+    expect(SupportedActions).toContain('mobile.fill');
+    expect(SupportedActions).toContain('mobile.expectVisible');
+    expect(SupportedActions).toContain('mobile.expectText');
+    expect(SupportedActions).toContain('mobile.screenshot');
+    expect(SupportedActions).toContain('mobile.back');
+  });
+
+  it('validates a mobile action with a stable selector', () => {
+    const validator = createManifestValidator();
+    const result = validator({
+      schemaVersion: '1.0.0', id: 'mobile-login', name: 'Mobile login', description: '', type: 'mobile',
+      tags: [], priority: 'normal', preconditions: [], variables: [], secrets: [], setup: [],
+      steps: [{ id: 'open-app', actions: [
+        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554', appPackage: 'com.example', appActivity: '.MainActivity' } },
+        { id: 'tap-login', type: 'mobile.tap', selector: 'id=com.example:id/login' },
+        { id: 'fill-email', type: 'mobile.fill', selector: 'id=com.example:id/email', value: 'user@example.com' },
+        { id: 'assert-welcome', type: 'mobile.expectText', selector: 'id=com.example:id/welcome', expectedText: 'Welcome' },
+        { id: 'shot', type: 'mobile.screenshot', name: 'welcome' },
+        { id: 'back', type: 'mobile.back' },
+      ] }], cleanup: [], artifacts: { screenshots: 'after' }, runner: { minBrowsers: [] },
+      permissions: { networkAccess: false }, source: { repository: 'local', path: 'mobile.yaml' }, generatedCode: { path: 'generated/mobile.spec.ts' },
+    });
+    expect(result).toMatchObject({ valid: true, errors: null });
   });
 
   it('accepts the documented semantic targets and schema version alias', () => {
