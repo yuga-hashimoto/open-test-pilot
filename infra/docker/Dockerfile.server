@@ -17,4 +17,4 @@ COPY --from=build /workspace/apps/server/dist ./apps/server/dist
 COPY --from=build /workspace/packages ./packages
 RUN pnpm install --prod --frozen-lockfile
 EXPOSE 3001
-CMD ["node", "apps/server/dist/index.js"]
+CMD ["pnpm", "--filter", "@open-test-pilot/server", "start"]
