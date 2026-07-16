@@ -1,5 +1,6 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
-import type { ArtifactMetadata, Organization, Project, RepositoryRecord, RunRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { ArtifactMetadata, ChangeRequestRecord, Organization, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -33,6 +34,36 @@ export class PostgresTenantRepository implements TenantRepository {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async upsertGitHubUser(githubUserId: string, login: string): Promise<{ id: string; githubUserId: string; login: string }> {
+    const result = await this.pool.query<{ id: string; github_user_id: string; login: string }>(
+      'INSERT INTO users (github_user_id, login) VALUES ($1, $2) ON CONFLICT (github_user_id) DO UPDATE SET login = EXCLUDED.login RETURNING id, github_user_id, login',
+      [githubUserId, login],
+    );
+    const row = requiredRow(result.rows[0]);
+    return { id: row.id, githubUserId: row.github_user_id, login: row.login };
+  }
+
+  async createAuthSession(userId: string, expiresAt: string): Promise<{ token: string; expiresAt: string }> {
+    const token = randomUUID();
+    await this.pool.query('INSERT INTO auth_sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)', [userId, createHash('sha256').update(token).digest('hex'), expiresAt]);
+    return { token, expiresAt };
+  }
+
+  async getAuthSession(token: string): Promise<{ userId: string; expiresAt: string } | undefined> {
+    const result = await this.pool.query<{ user_id: string; expires_at: Date }>('SELECT user_id, expires_at FROM auth_sessions WHERE token_hash = $1 AND expires_at > now()', [createHash('sha256').update(token).digest('hex')]);
+    const row = result.rows[0];
+    return row === undefined ? undefined : { userId: row.user_id, expiresAt: dateValue(row.expires_at) };
+  }
+
+  async addOrganizationMembership(organizationId: string, userId: string, role: string): Promise<void> {
+    await this.pool.query('INSERT INTO organization_memberships (organization_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role', [organizationId, userId, role]);
+  }
+
+  async isOrganizationMember(organizationId: string, userId: string): Promise<boolean> {
+    const result = await this.pool.query<{ exists: boolean }>('SELECT EXISTS (SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2) AS exists', [organizationId, userId]);
+    return result.rows[0]?.exists ?? false;
   }
 
   async createOrganization(name: string): Promise<Organization> {
@@ -226,6 +257,91 @@ export class PostgresTenantRepository implements TenantRepository {
       return result.rows[0] === undefined ? undefined : repositoryFromRow(result.rows[0]);
     });
   }
+
+  async createSchedule(organizationId: string, projectId: string, testId: string, cron: string, enabled?: boolean): Promise<ScheduleRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; cron: string; enabled: boolean; created_at: Date }>(
+        'INSERT INTO schedules (organization_id, project_id, test_id, cron, enabled) VALUES ($1, $2, $3, $4, $5) RETURNING id, organization_id, project_id, test_id, cron, enabled, created_at',
+        [organizationId, projectId, testId, cron, enabled ?? true],
+      );
+      return scheduleFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listSchedules(organizationId: string): Promise<ScheduleRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; project_id: string; test_id: string; cron: string; enabled: boolean; created_at: Date }>(
+        'SELECT id, organization_id, project_id, test_id, cron, enabled, created_at FROM schedules WHERE organization_id = $1 ORDER BY created_at DESC',
+        [organizationId],
+      );
+      return result.rows.map(scheduleFromRow);
+    });
+  }
+
+  async createChangeRequest(organizationId: string, title: string, description?: string): Promise<ChangeRequestRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; title: string; description: string; status: string; created_at: Date; updated_at: Date }>(
+        'INSERT INTO change_requests (organization_id, title, description) VALUES ($1, $2, $3) RETURNING id, organization_id, title, description, status, created_at, updated_at',
+        [organizationId, title, description ?? ''],
+      );
+      return changeRequestFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listChangeRequests(organizationId: string): Promise<ChangeRequestRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; title: string; description: string; status: string; created_at: Date; updated_at: Date }>(
+        'SELECT id, organization_id, title, description, status, created_at, updated_at FROM change_requests WHERE organization_id = $1 ORDER BY created_at DESC',
+        [organizationId],
+      );
+      return result.rows.map(changeRequestFromRow);
+    });
+  }
+
+  async getChangeRequest(organizationId: string, id: string): Promise<ChangeRequestRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; title: string; description: string; status: string; created_at: Date; updated_at: Date }>(
+        'SELECT id, organization_id, title, description, status, created_at, updated_at FROM change_requests WHERE organization_id = $1 AND id = $2',
+        [organizationId, id],
+      );
+      return result.rows[0] === undefined ? undefined : changeRequestFromRow(result.rows[0]);
+    });
+  }
+
+  async updateChangeRequest(organizationId: string, id: string, patch: { status?: ChangeRequestRecord['status']; description?: string }): Promise<ChangeRequestRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; title: string; description: string; status: string; created_at: Date; updated_at: Date }>(
+        `UPDATE change_requests SET
+          status = COALESCE($3, status),
+          description = COALESCE($4, description),
+          updated_at = now()
+        WHERE organization_id = $1 AND id = $2
+        RETURNING id, organization_id, title, description, status, created_at, updated_at`,
+        [organizationId, id, patch.status ?? null, patch.description ?? null],
+      );
+      return result.rows[0] === undefined ? undefined : changeRequestFromRow(result.rows[0]);
+    });
+  }
+
+  async createRepair(organizationId: string, runId: string, reason: string): Promise<RepairRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; run_id: string; category: string; status: string; created_at: Date }>(
+        'INSERT INTO repair_attempts (organization_id, run_id, attempt, category, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, organization_id, run_id, category, status, created_at',
+        [organizationId, runId, 1, reason, 'queued'],
+      );
+      return repairFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async createPullRequest(organizationId: string, url: string): Promise<PullRequestRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; url: string; created_at: Date }>(
+        'INSERT INTO pull_requests (organization_id, url) VALUES ($1, $2) RETURNING id, organization_id, url, created_at',
+        [organizationId, url],
+      );
+      return pullRequestFromRow(requiredRow(result.rows[0]));
+    });
+  }
 }
 
 function dateValue(value: Date | string): string { return value instanceof Date ? value.toISOString() : value; }
@@ -253,4 +369,20 @@ function repositoryFromRow(row: RepositoryRow): RepositoryRecord {
     ...(row.installation_id === null ? {} : { installationId: Number(row.installation_id) }),
     createdAt: dateValue(row.created_at),
   };
+}
+
+function scheduleFromRow(row: { id: string; organization_id: string; project_id: string; test_id: string; cron: string; enabled: boolean; created_at: Date }): ScheduleRecord {
+  return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, testId: row.test_id, cron: row.cron, enabled: row.enabled, createdAt: dateValue(row.created_at) };
+}
+
+function changeRequestFromRow(row: { id: string; organization_id: string; title: string; description: string; status: string; created_at: Date; updated_at: Date }): ChangeRequestRecord {
+  return { id: row.id, organizationId: row.organization_id, title: row.title, description: row.description, status: row.status as ChangeRequestRecord['status'], createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) };
+}
+
+function repairFromRow(row: { id: string; organization_id: string; run_id: string; category: string; status: string; created_at: Date }): RepairRecord {
+  return { id: row.id, organizationId: row.organization_id, runId: row.run_id, reason: row.category, status: row.status as RepairRecord['status'], createdAt: dateValue(row.created_at) };
+}
+
+function pullRequestFromRow(row: { id: string; organization_id: string; url: string; created_at: Date }): PullRequestRecord {
+  return { id: row.id, organizationId: row.organization_id, url: row.url, createdAt: dateValue(row.created_at) };
 }

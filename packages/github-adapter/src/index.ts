@@ -77,6 +77,8 @@ export interface GitHubRepository {
   private: boolean;
 }
 
+export interface GitHubAuthenticatedUser { id: number; login: string; }
+
 export interface GitHubInstallationRepository extends GitHubRepository { owner: string; name: string; }
 
 export interface GitHubCheckRunInput { name: string; headSha: string; status: 'queued' | 'in_progress' | 'completed'; conclusion?: 'success' | 'failure' | 'cancelled' | 'neutral'; title?: string; summary?: string; }
@@ -101,6 +103,12 @@ export class GitHubApiClient {
       throw new Error(`GitHub repository lookup failed: ${body.message ?? 'incomplete response'}`);
     }
     return { id: body.id, fullName: body.full_name, defaultBranch: body.default_branch, private: body.private };
+  }
+
+  public async getAuthenticatedUser(): Promise<GitHubAuthenticatedUser> {
+    const body = await this.request<{ id?: number; login?: string }>('https://api.github.com/user', { method: 'GET' });
+    if (body.id === undefined || body.login === undefined) throw new Error('GitHub authenticated-user response was incomplete');
+    return { id: body.id, login: body.login };
   }
 
   public async listInstallationRepositories(): Promise<GitHubInstallationRepository[]> {

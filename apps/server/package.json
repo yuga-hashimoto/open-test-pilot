@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@open-test-pilot/github-adapter": "workspace:*",
+    "@open-test-pilot/manifest-schema": "workspace:*",
     "@open-test-pilot/runner-protocol": "workspace:*",
     "@open-test-pilot/queue-adapter": "workspace:*",
     "@open-test-pilot/storage-adapter": "workspace:*",

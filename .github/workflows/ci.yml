@@ -86,3 +86,86 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
+
+  plugin-and-packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @open-test-pilot/claude-code-plugin validate
+      - run: pnpm --filter @open-test-pilot/cli build
+      - run: mkdir -p /tmp/open-test-pilot-packages
+      - run: pnpm --filter @open-test-pilot/cli pack --pack-destination /tmp/open-test-pilot-packages
+      - run: test -s /tmp/open-test-pilot-packages/*.tgz
+
+  documentation-and-helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint infra/helm/opentestpilot
+      - run: |
+          for file in LICENSE NOTICE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md docs/REQUIREMENT_AUDIT.md docs/OSS_GOVERNANCE.md; do
+            test -s "$file"
+          done
+      - run: test "$(find infra/postgres/migrations -maxdepth 1 -name '*.sql' | wc -l)" -ge 6
+
+  migration-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: opentestpilot
+          POSTGRES_USER: opentestpilot
+          POSTGRES_PASSWORD: opentestpilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opentestpilot -d opentestpilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - name: Apply every migration on a clean database
+        env:
+          PGPASSWORD: opentestpilot
+        run: |
+          for migration in infra/postgres/migrations/*.sql; do
+            psql --host 127.0.0.1 --port 5432 --username opentestpilot --dbname opentestpilot --set ON_ERROR_STOP=1 --file "$migration"
+          done
+      - name: Verify tenant RLS and auth session schema
+        env:
+          PGPASSWORD: opentestpilot
+        run: |
+          psql --host 127.0.0.1 --port 5432 --username opentestpilot --dbname opentestpilot --set ON_ERROR_STOP=1 --command "SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'auth_sessions';"
+          psql --host 127.0.0.1 --port 5432 --username opentestpilot --dbname opentestpilot --set ON_ERROR_STOP=1 --command "DO \$\$ DECLARE table_name text; enabled boolean; forced boolean; BEGIN FOREACH table_name IN ARRAY ARRAY['schedules','change_requests','pull_requests','repair_attempts'] LOOP SELECT c.relrowsecurity, c.relforcerowsecurity INTO enabled, forced FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = table_name; IF NOT enabled OR NOT forced THEN RAISE EXCEPTION 'RLS is not enabled and forced for %', table_name; END IF; END LOOP; END \$\$;"
+
+  manifest-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm testpilot manifest validate examples/manifests/complex-flow.yaml
+      - run: pnpm testpilot manifest validate examples/manifests/android-settings.yaml
+      - run: pnpm testpilot manifest generate examples/manifests/complex-flow.yaml

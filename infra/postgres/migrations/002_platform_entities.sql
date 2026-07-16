@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS repair_attempts (
 DO $$ DECLARE table_name text; BEGIN
   FOREACH table_name IN ARRAY ARRAY['project_memberships','repository_installations','branches','commits','manifests','generated_codes','change_requests','pull_requests','runner_capabilities','schedules','repair_attempts'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
-    EXECUTE format('DROP POLICY IF EXISTS %I_tenant_isolation ON %I', table_name, table_name);
-    EXECUTE format('CREATE POLICY %I_tenant_isolation ON %I USING (organization_id = current_setting(''app.organization_id'', true)::uuid)', table_name, table_name);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', table_name || '_tenant_isolation', table_name);
+    EXECUTE format('CREATE POLICY %I ON %I USING (organization_id = current_setting(''app.organization_id'', true)::uuid)', table_name || '_tenant_isolation', table_name);
   END LOOP;
 END $$;

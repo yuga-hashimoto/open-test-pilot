@@ -4,6 +4,7 @@ import {
   type AgentRequest,
   type AgentResult,
   AgentProtocolVersion,
+  createDefaultAgentAdapterRegistry,
 } from './index.js';
 
 describe('Agent Protocol', () => {
@@ -132,5 +133,17 @@ describe('Agent Protocol', () => {
       expect(result.proposedChanges?.manifest).toBeTruthy();
       expect(result.pullRequestIntent?.branch).toBe('testpilot/fix-login-locators');
     });
+  });
+
+  it('provides interchangeable Claude Code, Codex, and OpenCode adapter contracts', async () => {
+    const registry = createDefaultAgentAdapterRegistry({ codex: async (request) => ({ requestId: request.requestId, protocolVersion: AgentProtocolVersion, status: 'completed', findings: [] }) });
+    expect(registry.list().map((adapter) => adapter.id)).toEqual(['claude-code', 'codex', 'opencode']);
+    expect((await registry.execute('codex', { requestId: 'adapter-1', protocolVersion: AgentProtocolVersion, operation: 'analyze', repository: { url: 'file:///repo', branch: 'main', commit: 'abc' } })).status).toBe('completed');
+    expect((await registry.execute('opencode', { requestId: 'adapter-2', protocolVersion: AgentProtocolVersion, operation: 'review', repository: { url: 'file:///repo', branch: 'main', commit: 'abc' } })).status).toBe('rejected');
+  });
+
+  it('rejects adapter responses that do not correlate to the request', async () => {
+    const registry = createDefaultAgentAdapterRegistry({ 'claude-code': async () => ({ requestId: 'wrong', protocolVersion: AgentProtocolVersion, status: 'completed', findings: [] }) });
+    await expect(registry.execute('claude-code', { requestId: 'expected', protocolVersion: AgentProtocolVersion, operation: 'analyze', repository: { url: 'file:///repo', branch: 'main', commit: 'abc' } })).rejects.toThrow('requestId mismatch');
   });
 });

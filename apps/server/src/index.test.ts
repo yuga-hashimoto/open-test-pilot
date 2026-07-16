@@ -3,9 +3,35 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildServer, InMemoryTenantRepository } from './index.js';
+import { buildServer, createConfiguredRepository, InMemoryTenantRepository } from './index.js';
+
+function validManifest(id: string, name: string): Record<string, unknown> {
+  return { schemaVersion: '1.0.0', id, name, description: '', type: 'web', tags: [], priority: 'normal', preconditions: [], variables: [], secrets: [], setup: [], steps: [], cleanup: [], artifacts: { screenshots: 'after' }, runner: { minBrowsers: ['chromium'] }, permissions: { networkAccess: true }, source: { repository: 'local', path: `${id}.yaml` }, generatedCode: { path: `generated/${id}.spec.ts` } };
+}
 
 describe('OpenTestPilot server API', () => {
+  it('enforces a GitHub OAuth session and organization membership when auth is required', async () => {
+    process.env['AUTH_REQUIRED'] = 'true';
+    try {
+      const repository = new InMemoryTenantRepository();
+      const app = buildServer(repository);
+      const user = repository.upsertGitHubUser('123', 'qa-user');
+      const session = repository.createAuthSession(user.id, new Date(Date.now() + 60_000).toISOString());
+      const organization = repository.createOrganization('Private QA');
+      repository.addOrganizationMembership(organization.id, user.id, 'owner');
+      const missing = await app.inject({ method: 'GET', url: `/v1/organizations/${organization.id}`, headers: { 'x-organization-id': organization.id } });
+      expect(missing.statusCode).toBe(401);
+      const allowed = await app.inject({ method: 'GET', url: `/v1/organizations/${organization.id}`, headers: { 'x-organization-id': organization.id, authorization: `Bearer ${session.token}` } });
+      expect(allowed.statusCode).toBe(200);
+      const other = repository.createOrganization('Other');
+      const denied = await app.inject({ method: 'GET', url: `/v1/organizations/${other.id}`, headers: { 'x-organization-id': other.id, authorization: `Bearer ${session.token}` } });
+      expect(denied.statusCode).toBe(403);
+      await app.close();
+    } finally {
+      delete process.env['AUTH_REQUIRED'];
+    }
+  });
+
   it('creates an organization and denies a cross-organization read', async () => {
     const app = buildServer();
     const first = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'First' } });
@@ -38,7 +64,7 @@ describe('OpenTestPilot server API', () => {
       method: 'POST',
       url: `/v1/organizations/${organizationId}/tests`,
       headers: { 'x-organization-id': organizationId },
-      payload: { projectId, name: 'Login', manifestId: 'login', manifest: { schemaVersion: '1.0.0', id: 'login' } },
+      payload: { projectId, name: 'Login', manifestId: 'login', manifest: validManifest('login', 'Login') },
     });
     expect(test.statusCode).toBe(201);
     const listed = await app.inject({
@@ -56,9 +82,11 @@ describe('OpenTestPilot server API', () => {
     expect(manifest.statusCode).toBe(200);
     expect(manifest.json<{ manifestId: string }>().manifestId).toBe('login');
     expect(manifest.json<{ id: string }>().id).toBe('login');
-    const updatedManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { schemaVersion: '1.0.0', id: 'login', name: 'Updated' } });
+    const updatedManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { ...validManifest('login', 'Updated'), testId, manifestId: 'login' } });
     expect(updatedManifest.statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId } })).json<{ name: string }>().name).toBe('Updated');
+    const invalidManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { schemaVersion: '1.0.0', id: 'login' } });
+    expect(invalidManifest.statusCode).toBe(400);
     const generated = await app.inject({ method: 'GET', url: `/v1/tests/${testId}/generated-code`, headers: { 'x-organization-id': organizationId } });
     expect(generated.statusCode).toBe(200);
     expect(generated.json<{ testId: string }>().testId).toBe(testId);
@@ -341,5 +369,363 @@ describe('repository persistence and sync', () => {
     const result = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/sync`, headers: { 'x-organization-id': org } });
     expect(result.statusCode).toBe(503);
     await app.close();
+  });
+});
+
+describe('schedule persistence', () => {
+  it('creates and lists tenant-scoped schedules via repository', async () => {
+    const app = buildServer();
+    const orgA = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Sched A' } })).json<{ id: string }>().id;
+    const orgB = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Sched B' } })).json<{ id: string }>().id;
+    const projectA = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/projects`, headers: { 'x-organization-id': orgA }, payload: { name: 'pA' } })).json<{ id: string }>().id;
+    const testA = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/tests`, headers: { 'x-organization-id': orgA }, payload: { projectId: projectA, name: 'tA', manifestId: 'ma' } })).json<{ id: string }>().id;
+    const projectB = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgB}/projects`, headers: { 'x-organization-id': orgB }, payload: { name: 'pB' } })).json<{ id: string }>().id;
+    const testB = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgB}/tests`, headers: { 'x-organization-id': orgB }, payload: { projectId: projectB, name: 'tB', manifestId: 'mb' } })).json<{ id: string }>().id;
+
+    const s1 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgA }, payload: { projectId: projectA, testId: testA, cron: '0 9 * * 1' } });
+    expect(s1.statusCode).toBe(201);
+    expect(s1.json<{ enabled: boolean; cron: string }>().enabled).toBe(true);
+    expect(s1.json<{ cron: string }>().cron).toBe('0 9 * * 1');
+
+    const s2 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgA }, payload: { projectId: projectA, testId: testA, cron: '0 12 * * 5', enabled: false } });
+    expect(s2.statusCode).toBe(201);
+    expect(s2.json<{ enabled: boolean }>().enabled).toBe(false);
+
+    const s3 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgB}/schedules`, headers: { 'x-organization-id': orgB }, payload: { projectId: projectB, testId: testB, cron: '0 18 * * *' } });
+    expect(s3.statusCode).toBe(201);
+
+    const listA = await app.inject({ method: 'GET', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgA } });
+    expect(listA.statusCode).toBe(200);
+    expect(listA.json<{ schedules: Array<{ cron: string }> }>().schedules).toHaveLength(2);
+
+    const listB = await app.inject({ method: 'GET', url: `/v1/organizations/${orgB}/schedules`, headers: { 'x-organization-id': orgB } });
+    expect(listB.statusCode).toBe(200);
+    expect(listB.json<{ schedules: Array<{ cron: string }> }>().schedules).toHaveLength(1);
+
+    const denied = await app.inject({ method: 'GET', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgB } });
+    expect(denied.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('rejects invalid cron expressions', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Cron' } })).json<{ id: string }>().id;
+    const proj = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/projects`, headers: { 'x-organization-id': org }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const test = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/tests`, headers: { 'x-organization-id': org }, payload: { projectId: proj, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    const bad = await app.inject({ method: 'POST', url: `/v1/organizations/${org}/schedules`, headers: { 'x-organization-id': org }, payload: { projectId: proj, testId: test, cron: 'not-a-cron' } });
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('change-request persistence', () => {
+  it('creates, lists, gets, and patches tenant-scoped change requests', async () => {
+    const app = buildServer();
+    const orgA = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'CR A' } })).json<{ id: string }>().id;
+    const orgB = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'CR B' } })).json<{ id: string }>().id;
+
+    const cr1 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgA }, payload: { title: 'Fix login', description: 'Update selector' } });
+    expect(cr1.statusCode).toBe(201);
+    expect(cr1.json<{ title: string; status: string }>().title).toBe('Fix login');
+    expect(cr1.json<{ status: string }>().status).toBe('open');
+    const cr1Id = cr1.json<{ id: string }>().id;
+
+    const cr2 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgA }, payload: { title: 'Add signup' } });
+    expect(cr2.statusCode).toBe(201);
+    const cr2Id = cr2.json<{ id: string }>().id;
+
+    const cr3 = await app.inject({ method: 'POST', url: `/v1/organizations/${orgB}/change-requests`, headers: { 'x-organization-id': orgB }, payload: { title: 'Org B CR' } });
+    expect(cr3.statusCode).toBe(201);
+
+    const listA = await app.inject({ method: 'GET', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgA } });
+    expect(listA.json<{ changeRequests: Array<{ id: string }> }>().changeRequests).toHaveLength(2);
+
+    const listB = await app.inject({ method: 'GET', url: `/v1/organizations/${orgB}/change-requests`, headers: { 'x-organization-id': orgB } });
+    expect(listB.json<{ changeRequests: Array<{ id: string }> }>().changeRequests).toHaveLength(1);
+
+    const denied = await app.inject({ method: 'GET', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgB } });
+    expect(denied.statusCode).toBe(403);
+
+    const getCr1 = await app.inject({ method: 'GET', url: `/v1/change-requests/${cr1Id}`, headers: { 'x-organization-id': orgA } });
+    expect(getCr1.statusCode).toBe(200);
+    expect(getCr1.json<{ title: string; description: string }>().title).toBe('Fix login');
+    expect(getCr1.json<{ description: string }>().description).toBe('Update selector');
+
+    const crossOrgRead = await app.inject({ method: 'GET', url: `/v1/change-requests/${cr1Id}`, headers: { 'x-organization-id': orgB } });
+    expect(crossOrgRead.statusCode).toBe(404);
+
+    const patch = await app.inject({ method: 'PATCH', url: `/v1/change-requests/${cr1Id}`, headers: { 'x-organization-id': orgA }, payload: { status: 'approved' } });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<{ status: string }>().status).toBe('approved');
+
+    const reFetch = await app.inject({ method: 'GET', url: `/v1/change-requests/${cr1Id}`, headers: { 'x-organization-id': orgA } });
+    expect(reFetch.json<{ status: string }>().status).toBe('approved');
+
+    const patchDesc = await app.inject({ method: 'PATCH', url: `/v1/change-requests/${cr2Id}`, headers: { 'x-organization-id': orgA }, payload: { description: 'Updated desc' } });
+    expect(patchDesc.statusCode).toBe(200);
+    expect(patchDesc.json<{ description: string }>().description).toBe('Updated desc');
+    expect(patchDesc.json<{ status: string }>().status).toBe('open');
+
+    const crossOrgPatch = await app.inject({ method: 'PATCH', url: `/v1/change-requests/${cr1Id}`, headers: { 'x-organization-id': orgB }, payload: { status: 'rejected' } });
+    expect(crossOrgPatch.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('rejects missing title and invalid status', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Invalid CR' } })).json<{ id: string }>().id;
+
+    const noTitle = await app.inject({ method: 'POST', url: `/v1/organizations/${org}/change-requests`, headers: { 'x-organization-id': org }, payload: { description: 'no title' } });
+    expect(noTitle.statusCode).toBe(400);
+
+    const cr = await app.inject({ method: 'POST', url: `/v1/organizations/${org}/change-requests`, headers: { 'x-organization-id': org }, payload: { title: 'Good CR' } });
+    const crId = cr.json<{ id: string }>().id;
+
+    const badStatus = await app.inject({ method: 'PATCH', url: `/v1/change-requests/${crId}`, headers: { 'x-organization-id': org }, payload: { status: 'closed' } });
+    expect(badStatus.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('returns 404 for nonexistent change request', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'NF CR' } })).json<{ id: string }>().id;
+    const notFound = await app.inject({ method: 'GET', url: '/v1/change-requests/change-request-nonexistent', headers: { 'x-organization-id': org } });
+    expect(notFound.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe('repair persistence', () => {
+  it('creates a repair through repository', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Repair Org' } })).json<{ id: string }>().id;
+    const proj = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/projects`, headers: { 'x-organization-id': org }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const test = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/tests`, headers: { 'x-organization-id': org }, payload: { projectId: proj, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    const run = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/runs`, headers: { 'x-organization-id': org }, payload: { projectId: proj, testId: test } })).json<{ runId: string }>().runId;
+
+    const repair = await app.inject({ method: 'POST', url: `/v1/runs/${run}/repair`, headers: { 'x-organization-id': org }, payload: { reason: 'flaky selector' } });
+    expect(repair.statusCode).toBe(201);
+    expect(repair.json<{ reason: string; status: string; runId: string }>().reason).toBe('flaky selector');
+    expect(repair.json<{ status: string }>().status).toBe('queued');
+    expect(repair.json<{ runId: string }>().runId).toBe(run);
+
+    await app.close();
+  });
+
+  it('rejects repair without a reason', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Repair NoReason' } })).json<{ id: string }>().id;
+    const proj = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/projects`, headers: { 'x-organization-id': org }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const test = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/tests`, headers: { 'x-organization-id': org }, payload: { projectId: proj, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    const run = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/runs`, headers: { 'x-organization-id': org }, payload: { projectId: proj, testId: test } })).json<{ runId: string }>().runId;
+
+    const badRepair = await app.inject({ method: 'POST', url: `/v1/runs/${run}/repair`, headers: { 'x-organization-id': org }, payload: { reason: '' } });
+    expect(badRepair.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('rejects cross-tenant repair', async () => {
+    const app = buildServer();
+    const orgA = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Repair A' } })).json<{ id: string }>().id;
+    const orgB = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Repair B' } })).json<{ id: string }>().id;
+    const proj = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/projects`, headers: { 'x-organization-id': orgA }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const test = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/tests`, headers: { 'x-organization-id': orgA }, payload: { projectId: proj, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    const run = (await app.inject({ method: 'POST', url: `/v1/organizations/${orgA}/runs`, headers: { 'x-organization-id': orgA }, payload: { projectId: proj, testId: test } })).json<{ runId: string }>().runId;
+
+    const denied = await app.inject({ method: 'POST', url: `/v1/runs/${run}/repair`, headers: { 'x-organization-id': orgB }, payload: { reason: 'unauthorized' } });
+    expect(denied.statusCode).toBe(403);
+
+    await app.close();
+  });
+});
+
+describe('pull-request persistence', () => {
+  it('creates a pull request through repository', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'PR Org' } })).json<{ id: string }>().id;
+
+    const pr = await app.inject({ method: 'POST', url: '/v1/pull-requests', headers: { 'x-organization-id': org }, payload: { url: 'https://github.com/openai/open-test-pilot/pull/42' } });
+    expect(pr.statusCode).toBe(201);
+    expect(pr.json<{ url: string }>().url).toBe('https://github.com/openai/open-test-pilot/pull/42');
+    expect(pr.json<{ organizationId: string }>().organizationId).toBe(org);
+
+    await app.close();
+  });
+
+  it('rejects pull request without url', async () => {
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'PR NoUrl' } })).json<{ id: string }>().id;
+
+    const bad = await app.inject({ method: 'POST', url: '/v1/pull-requests', headers: { 'x-organization-id': org }, payload: {} });
+    expect(bad.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('rejects pull request without tenant header', async () => {
+    const app = buildServer();
+    const bad = await app.inject({ method: 'POST', url: '/v1/pull-requests', payload: { url: 'https://github.com/a/b/pull/1' } });
+    expect(bad.statusCode).toBe(401);
+    await app.close();
+  });
+});
+
+describe('restart-like persistence via shared repository', () => {
+  it('survives server recreation when sharing the same repository', async () => {
+    const repository = new InMemoryTenantRepository();
+
+    const firstApp = buildServer(repository);
+    const org = (await firstApp.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Persistent' } })).json<{ id: string }>().id;
+    const proj = (await firstApp.inject({ method: 'POST', url: `/v1/organizations/${org}/projects`, headers: { 'x-organization-id': org }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const test = (await firstApp.inject({ method: 'POST', url: `/v1/organizations/${org}/tests`, headers: { 'x-organization-id': org }, payload: { projectId: proj, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    const run = (await firstApp.inject({ method: 'POST', url: `/v1/organizations/${org}/runs`, headers: { 'x-organization-id': org }, payload: { projectId: proj, testId: test } })).json<{ runId: string }>().runId;
+
+    await firstApp.inject({ method: 'POST', url: `/v1/organizations/${org}/schedules`, headers: { 'x-organization-id': org }, payload: { projectId: proj, testId: test, cron: '0 9 * * 1' } });
+    await firstApp.inject({ method: 'POST', url: `/v1/organizations/${org}/change-requests`, headers: { 'x-organization-id': org }, payload: { title: 'Persist CR', description: 'Pre-restart' } });
+    await firstApp.inject({ method: 'POST', url: `/v1/runs/${run}/repair`, headers: { 'x-organization-id': org }, payload: { reason: 'Pre-restart repair' } });
+    await firstApp.inject({ method: 'POST', url: '/v1/pull-requests', headers: { 'x-organization-id': org }, payload: { url: 'https://github.com/org/repo/pull/1' } });
+    await firstApp.close();
+
+    const secondApp = buildServer(repository);
+    const schedules = await secondApp.inject({ method: 'GET', url: `/v1/organizations/${org}/schedules`, headers: { 'x-organization-id': org } });
+    expect(schedules.json<{ schedules: Array<{ cron: string }> }>().schedules).toHaveLength(1);
+
+    const crList = await secondApp.inject({ method: 'GET', url: `/v1/organizations/${org}/change-requests`, headers: { 'x-organization-id': org } });
+    expect(crList.json<{ changeRequests: Array<{ title: string }> }>().changeRequests).toHaveLength(1);
+    expect(crList.json<{ changeRequests: Array<{ title: string }> }>().changeRequests[0]?.title).toBe('Persist CR');
+    const crId = crList.json<{ changeRequests: Array<{ id: string }> }>().changeRequests[0]?.id;
+
+    const crGet = await secondApp.inject({ method: 'GET', url: `/v1/change-requests/${crId}`, headers: { 'x-organization-id': org } });
+    expect(crGet.statusCode).toBe(200);
+    expect(crGet.json<{ description: string }>().description).toBe('Pre-restart');
+
+    const crPatch = await secondApp.inject({ method: 'PATCH', url: `/v1/change-requests/${crId}`, headers: { 'x-organization-id': org }, payload: { status: 'approved' } });
+    expect(crPatch.statusCode).toBe(200);
+    expect(crPatch.json<{ status: string }>().status).toBe('approved');
+
+    await secondApp.close();
+  });
+
+  it('isolates tenants after restart', async () => {
+    const repository = new InMemoryTenantRepository();
+
+    const app1 = buildServer(repository);
+    const orgA = (await app1.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'RT A' } })).json<{ id: string }>().id;
+    const orgB = (await app1.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'RT B' } })).json<{ id: string }>().id;
+    const projA = (await app1.inject({ method: 'POST', url: `/v1/organizations/${orgA}/projects`, headers: { 'x-organization-id': orgA }, payload: { name: 'p' } })).json<{ id: string }>().id;
+    const testA = (await app1.inject({ method: 'POST', url: `/v1/organizations/${orgA}/tests`, headers: { 'x-organization-id': orgA }, payload: { projectId: projA, name: 't', manifestId: 'm' } })).json<{ id: string }>().id;
+    await app1.inject({ method: 'POST', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgA }, payload: { projectId: projA, testId: testA, cron: '0 9 * * 1' } });
+    await app1.inject({ method: 'POST', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgA }, payload: { title: 'Org A CR' } });
+    await app1.inject({ method: 'POST', url: `/v1/organizations/${orgB}/change-requests`, headers: { 'x-organization-id': orgB }, payload: { title: 'Org B CR' } });
+    await app1.close();
+
+    const app2 = buildServer(repository);
+    const schedA = await app2.inject({ method: 'GET', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgA } });
+    expect(schedA.json<{ schedules: Array<{ cron: string }> }>().schedules).toHaveLength(1);
+
+    const schedB = await app2.inject({ method: 'GET', url: `/v1/organizations/${orgB}/schedules`, headers: { 'x-organization-id': orgB } });
+    expect(schedB.json<{ schedules: Array<{ cron: string }> }>().schedules).toHaveLength(0);
+
+    const denied = await app2.inject({ method: 'GET', url: `/v1/organizations/${orgA}/schedules`, headers: { 'x-organization-id': orgB } });
+    expect(denied.statusCode).toBe(403);
+
+    const crA = await app2.inject({ method: 'GET', url: `/v1/organizations/${orgA}/change-requests`, headers: { 'x-organization-id': orgA } });
+    expect(crA.json<{ changeRequests: Array<{ title: string }> }>().changeRequests[0]?.title).toBe('Org A CR');
+
+    const crB = await app2.inject({ method: 'GET', url: `/v1/organizations/${orgB}/change-requests`, headers: { 'x-organization-id': orgB } });
+    expect(crB.json<{ changeRequests: Array<{ title: string }> }>().changeRequests[0]?.title).toBe('Org B CR');
+
+    await app2.close();
+  });
+});
+
+describe('repository tenant isolation (data-layer)', () => {
+  it('enforces cross-org isolation for schedules, change requests, repairs, and pull requests', async () => {
+    const repo = new InMemoryTenantRepository();
+    const orgA = await repo.createOrganization('Org A');
+    const orgB = await repo.createOrganization('Org B');
+    const projA = await repo.createProject(orgA.id, 'pA');
+    const testA = await repo.createTest(orgA.id, projA.id, 'tA', 'ma');
+    const projB = await repo.createProject(orgB.id, 'pB');
+    const testB = await repo.createTest(orgB.id, projB.id, 'tB', 'mb');
+
+    const sched = await repo.createSchedule(orgA.id, projA.id, testA.id, '0 9 * * 1');
+    expect(sched.organizationId).toBe(orgA.id);
+    expect(await repo.listSchedules(orgB.id)).toHaveLength(0);
+    expect(await repo.listSchedules(orgA.id)).toHaveLength(1);
+
+    const cr = await repo.createChangeRequest(orgA.id, 'CR-A', 'desc');
+    expect(cr.organizationId).toBe(orgA.id);
+    expect(await repo.getChangeRequest(orgB.id, cr.id)).toBeUndefined();
+    expect(await repo.getChangeRequest(orgA.id, cr.id)).toMatchObject({ title: 'CR-A', status: 'open' });
+    expect(await repo.listChangeRequests(orgB.id)).toHaveLength(0);
+    expect(await repo.listChangeRequests(orgA.id)).toHaveLength(1);
+
+    const updated = await repo.updateChangeRequest(orgB.id, cr.id, { status: 'approved' });
+    expect(updated).toBeUndefined();
+    expect((await repo.getChangeRequest(orgA.id, cr.id))?.status).toBe('open');
+
+    const patched = await repo.updateChangeRequest(orgA.id, cr.id, { status: 'approved', description: 'updated' });
+    expect(patched).toBeDefined();
+    expect(patched?.status).toBe('approved');
+    expect(patched?.description).toBe('updated');
+
+    const runA = await repo.createRun(orgA.id, projA.id, testA.id);
+    const repair = await repo.createRepair(orgA.id, runA.id, 'flaky');
+    expect(repair.organizationId).toBe(orgA.id);
+    expect(repair.reason).toBe('flaky');
+    expect(repair.status).toBe('queued');
+    expect(repair.runId).toBe(runA.id);
+
+    const pr = await repo.createPullRequest(orgA.id, 'https://github.com/org/repo/pull/1');
+    expect(pr.organizationId).toBe(orgA.id);
+    expect(pr.url).toBe('https://github.com/org/repo/pull/1');
+  });
+
+  it('rejects nonexistent updateChangeRequest on wrong org', async () => {
+    const repo = new InMemoryTenantRepository();
+    const org = await repo.createOrganization('Org');
+    const result = await repo.updateChangeRequest(org.id, 'change-request-nonexistent', { status: 'rejected' });
+    expect(result).toBeUndefined();
+  });
+
+  it('isolates independent org data with same resource keys', async () => {
+    const repo = new InMemoryTenantRepository();
+    const orgA = await repo.createOrganization('A');
+    const orgB = await repo.createOrganization('B');
+
+    const crA = await repo.createChangeRequest(orgA.id, 'Title A');
+    const crB = await repo.createChangeRequest(orgB.id, 'Title B');
+
+    expect(crA.id).not.toBe(crB.id);
+    expect(await repo.getChangeRequest(orgA.id, crB.id)).toBeUndefined();
+    expect(await repo.getChangeRequest(orgB.id, crA.id)).toBeUndefined();
+    expect(await repo.listChangeRequests(orgA.id)).toHaveLength(1);
+    expect(await repo.listChangeRequests(orgB.id)).toHaveLength(1);
+  });
+});
+
+describe('createConfiguredRepository factory', () => {
+  it('returns InMemoryTenantRepository when DATABASE_URL is unset', () => {
+    delete process.env['DATABASE_URL'];
+    expect(createConfiguredRepository()).toBeInstanceOf(InMemoryTenantRepository);
+  });
+
+  it('returns PostgresTenantRepository when DATABASE_URL is set', () => {
+    process.env['DATABASE_URL'] = 'postgresql://localhost:5432/test';
+    try {
+      const repo = createConfiguredRepository();
+      // The Postgres class is not exported, but the factory should return
+      // a non-InMemory implementation.
+      expect(repo).not.toBeInstanceOf(InMemoryTenantRepository);
+      expect(typeof (repo as { close?: () => Promise<void> }).close).toBe('function');
+      void (repo as { close?: () => Promise<void> }).close?.();
+    } finally {
+      delete process.env['DATABASE_URL'];
+    }
   });
 });

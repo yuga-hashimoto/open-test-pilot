@@ -6,6 +6,7 @@
   "main": "./src/index.ts",
   "bin": { "testpilot": "./dist/launcher.mjs" },
   "exports": { ".": "./src/index.ts" },
+  "files": ["dist", "src", "README.md"],
   "scripts": {
     "lint": "tsc --noEmit --pretty false",
     "typecheck": "tsc --build",

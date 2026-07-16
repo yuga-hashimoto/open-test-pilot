@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { buildGitHubAuthorizationUrl, createGitHubInstallationToken, exchangeGitHubOAuthCode, GitHubApiClient, verifyWebhookSignature } from '@open-test-pilot/github-adapter';
+import { createManifestValidator } from '@open-test-pilot/manifest-schema';
 import { type RunnerCapabilities } from '@open-test-pilot/scheduler';
 import type { Job } from '@open-test-pilot/runner-protocol';
 import { validateCronExpression } from '@open-test-pilot/trigger-adapter';
@@ -102,6 +103,19 @@ export interface TenantRepository {
   getRepository(organizationId: string, id: string): MaybePromise<RepositoryRecord | undefined>;
   listRepositories(organizationId: string): MaybePromise<RepositoryRecord[]>;
   updateRepository(organizationId: string, id: string, patch: { fullName?: string; defaultBranch?: string; private?: boolean; githubRepositoryId?: number | null; installationId?: number | null }): MaybePromise<RepositoryRecord | undefined>;
+  createSchedule(organizationId: string, projectId: string, testId: string, cron: string, enabled?: boolean): MaybePromise<ScheduleRecord>;
+  listSchedules(organizationId: string): MaybePromise<ScheduleRecord[]>;
+  createChangeRequest(organizationId: string, title: string, description?: string): MaybePromise<ChangeRequestRecord>;
+  listChangeRequests(organizationId: string): MaybePromise<ChangeRequestRecord[]>;
+  getChangeRequest(organizationId: string, id: string): MaybePromise<ChangeRequestRecord | undefined>;
+  updateChangeRequest(organizationId: string, id: string, patch: { status?: ChangeRequestRecord['status']; description?: string }): MaybePromise<ChangeRequestRecord | undefined>;
+  createRepair(organizationId: string, runId: string, reason: string): MaybePromise<RepairRecord>;
+  createPullRequest(organizationId: string, url: string): MaybePromise<PullRequestRecord>;
+  upsertGitHubUser(githubUserId: string, login: string): MaybePromise<{ id: string; githubUserId: string; login: string }>;
+  createAuthSession(userId: string, expiresAt: string): MaybePromise<{ token: string; expiresAt: string }>;
+  getAuthSession(token: string): MaybePromise<{ userId: string; expiresAt: string } | undefined>;
+  addOrganizationMembership(organizationId: string, userId: string, role: string): MaybePromise<void>;
+  isOrganizationMember(organizationId: string, userId: string): MaybePromise<boolean>;
 }
 
 export class InMemoryTenantRepository implements TenantRepository {
@@ -113,11 +127,50 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly runResults = new Map<string, StoredRunResult>();
   private readonly artifacts = new Map<string, ArtifactMetadata>();
   private readonly repositories = new Map<string, RepositoryRecord>();
+  private readonly schedules = new Map<string, ScheduleRecord>();
+  private readonly changeRequests = new Map<string, ChangeRequestRecord>();
+  private readonly repairs = new Map<string, RepairRecord>();
+  private readonly pullRequests = new Map<string, PullRequestRecord>();
+  private readonly users = new Map<string, { id: string; githubUserId: string; login: string }>();
+  private readonly sessions = new Map<string, { userId: string; expiresAt: string }>();
+  private readonly memberships = new Set<string>();
 
   createOrganization(name: string): Organization {
     const organization = { id: `org-${randomUUID()}`, name, createdAt: new Date().toISOString() };
     this.organizations.set(organization.id, organization);
     return organization;
+  }
+
+  upsertGitHubUser(githubUserId: string, login: string): { id: string; githubUserId: string; login: string } {
+    const existing = [...this.users.values()].find((user) => user.githubUserId === githubUserId);
+    if (existing !== undefined) {
+      const updated = { ...existing, login };
+      this.users.set(existing.id, updated);
+      return updated;
+    }
+    const user = { id: `user-${randomUUID()}`, githubUserId, login };
+    this.users.set(user.id, user);
+    return user;
+  }
+
+  createAuthSession(userId: string, expiresAt: string): { token: string; expiresAt: string } {
+    const token = randomUUID();
+    this.sessions.set(createHash('sha256').update(token).digest('hex'), { userId, expiresAt });
+    return { token, expiresAt };
+  }
+
+  getAuthSession(token: string): { userId: string; expiresAt: string } | undefined {
+    const session = this.sessions.get(createHash('sha256').update(token).digest('hex'));
+    if (session === undefined || Date.parse(session.expiresAt) <= Date.now()) return undefined;
+    return session;
+  }
+
+  addOrganizationMembership(organizationId: string, userId: string, role: string): void {
+    this.memberships.add(`${organizationId}:${userId}:${role}`);
+  }
+
+  isOrganizationMember(organizationId: string, userId: string): boolean {
+    return [...this.memberships].some((membership) => membership.startsWith(`${organizationId}:${userId}:`));
   }
 
   getOrganization(id: string): Organization | undefined { return this.organizations.get(id); }
@@ -215,6 +268,52 @@ export class InMemoryTenantRepository implements TenantRepository {
     this.repositories.set(updated.id, updated);
     return updated;
   }
+
+  createSchedule(organizationId: string, projectId: string, testId: string, cron: string, enabled?: boolean): ScheduleRecord {
+    const schedule: ScheduleRecord = { id: `schedule-${randomUUID()}`, organizationId, projectId, testId, cron, enabled: enabled ?? true, createdAt: new Date().toISOString() };
+    this.schedules.set(schedule.id, schedule);
+    return schedule;
+  }
+
+  listSchedules(organizationId: string): ScheduleRecord[] {
+    return [...this.schedules.values()].filter((s) => s.organizationId === organizationId);
+  }
+
+  createChangeRequest(organizationId: string, title: string, description?: string): ChangeRequestRecord {
+    const timestamp = new Date().toISOString();
+    const record: ChangeRequestRecord = { id: `change-request-${randomUUID()}`, organizationId, title, description: description ?? '', status: 'open', createdAt: timestamp, updatedAt: timestamp };
+    this.changeRequests.set(record.id, record);
+    return record;
+  }
+
+  listChangeRequests(organizationId: string): ChangeRequestRecord[] {
+    return [...this.changeRequests.values()].filter((r) => r.organizationId === organizationId);
+  }
+
+  getChangeRequest(organizationId: string, id: string): ChangeRequestRecord | undefined {
+    const record = this.changeRequests.get(id);
+    return record?.organizationId === organizationId ? record : undefined;
+  }
+
+  updateChangeRequest(organizationId: string, id: string, patch: { status?: ChangeRequestRecord['status']; description?: string }): ChangeRequestRecord | undefined {
+    const record = this.changeRequests.get(id);
+    if (record === undefined || record.organizationId !== organizationId) return undefined;
+    const updated: ChangeRequestRecord = { ...record, ...(patch.status === undefined ? {} : { status: patch.status }), ...(patch.description === undefined ? {} : { description: patch.description }), updatedAt: new Date().toISOString() };
+    this.changeRequests.set(updated.id, updated);
+    return updated;
+  }
+
+  createRepair(organizationId: string, runId: string, reason: string): RepairRecord {
+    const repair: RepairRecord = { id: `repair-${randomUUID()}`, organizationId, runId, reason, status: 'queued', createdAt: new Date().toISOString() };
+    this.repairs.set(repair.id, repair);
+    return repair;
+  }
+
+  createPullRequest(organizationId: string, url: string): PullRequestRecord {
+    const record: PullRequestRecord = { id: `pull-request-${randomUUID()}`, organizationId, url, createdAt: new Date().toISOString() };
+    this.pullRequests.set(record.id, record);
+    return record;
+  }
 }
 
 interface OrganizationParams { organizationId: string }
@@ -234,13 +333,13 @@ interface RunnerParams { runnerId: string }
 interface JobParams { jobId: string }
 interface CompleteJobBody { status: 'passed' | 'failed' | 'cancelled'; result?: { failures?: unknown[]; steps?: unknown[]; [key: string]: unknown } }
 interface CreateScheduleBody { projectId: string; testId: string; cron: string; enabled?: boolean }
-interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
+export interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
 interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: number }
-interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
+export interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
 interface CreateChangeRequestBody { title: string; description?: string }
-interface RepairRecord { id: string; organizationId: string; runId: string; reason: string; status: 'queued'; createdAt: string }
-interface PullRequestRecord { id: string; organizationId: string; url: string; createdAt: string }
+export interface RepairRecord { id: string; organizationId: string; runId: string; reason: string; status: 'queued'; createdAt: string }
+export interface PullRequestRecord { id: string; organizationId: string; url: string; createdAt: string }
 
 function tenantId(request: FastifyRequest<{ Headers: TenantHeaders }>): string | undefined {
   const value = request.headers['x-organization-id'];
@@ -270,6 +369,13 @@ function requireTenant(request: FastifyRequest<{ Headers: TenantHeaders }>, repl
   return true;
 }
 
+function bearerToken(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  if (header === undefined || !header.startsWith('Bearer ')) return undefined;
+  const token = header.slice('Bearer '.length).trim();
+  return token.length === 0 ? undefined : token;
+}
+
 export function createConfiguredRepository(): TenantRepository {
   return process.env['DATABASE_URL'] === undefined ? new InMemoryTenantRepository() : new PostgresTenantRepository(process.env['DATABASE_URL']);
 }
@@ -280,11 +386,20 @@ export function createConfiguredArtifactStore(): StorageAdapter { if (process.en
 export function buildServer(repository: TenantRepository = createConfiguredRepository(), executionQueue: ExecutionQueue = createConfiguredExecutionQueue(), artifactStore: StorageAdapter = createConfiguredArtifactStore()): FastifyInstance {
   const app = Fastify({ logger: false });
   const oauthStates = new Set<string>();
-  const schedules = new Map<string, ScheduleRecord>();
-  const changeRequests = new Map<string, ChangeRequestRecord>();
-  const repairs = new Map<string, RepairRecord>();
-  const pullRequests = new Map<string, PullRequestRecord>();
+  const authenticatedUsers = new WeakMap<object, string>();
+  const validateManifest = createManifestValidator();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
+
+  app.addHook('preHandler', async (request, reply) => {
+    if (process.env['AUTH_REQUIRED'] !== 'true' || !request.url.startsWith('/v1/') || request.url.startsWith('/v1/webhooks/')) return;
+    const session = await repository.getAuthSession(bearerToken(request) ?? '');
+    if (session === undefined) return reply.code(401).send({ error: 'GitHub OAuth session required' });
+    authenticatedUsers.set(request, session.userId);
+    const pathOrganization = /^\/v1\/organizations\/([^/]+)/.exec(request.url)?.[1];
+    const headerOrganization = request.headers['x-organization-id'];
+    const organizationId = pathOrganization ?? (typeof headerOrganization === 'string' ? headerOrganization : undefined);
+    if (organizationId !== undefined && !await repository.isOrganizationMember(organizationId, session.userId)) return reply.code(403).send({ error: 'organization membership required' });
+  });
 
   app.get<{ Querystring: GitHubStartQuery }>('/auth/github/start', async (request, reply) => {
     const clientId = process.env['GITHUB_CLIENT_ID'];
@@ -302,14 +417,21 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const clientSecret = process.env['GITHUB_CLIENT_SECRET'];
     if (clientId === undefined || clientSecret === undefined) return reply.code(503).send({ error: 'GitHub OAuth is not configured' });
     const token = await exchangeGitHubOAuthCode(code, clientId, clientSecret);
-    return reply.send({ authenticated: true, tokenType: token.tokenType, scope: token.scope });
+    const githubUser = await new GitHubApiClient(token.accessToken).getAuthenticatedUser();
+    const user = await repository.upsertGitHubUser(String(githubUser.id), githubUser.login);
+    const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
+    const session = await repository.createAuthSession(user.id, expiresAt);
+    return reply.send({ authenticated: true, sessionToken: session.token, expiresAt: session.expiresAt, login: user.login, scope: token.scope });
   });
 
   app.post<{ Body: CreateOrganizationBody }>('/v1/organizations', async (request, reply) => {
     if (typeof request.body?.name !== 'string' || request.body.name.trim().length === 0) {
       return reply.code(400).send({ error: 'name is required' });
     }
-    return reply.code(201).send(await repository.createOrganization(request.body.name.trim()));
+    const organization = await repository.createOrganization(request.body.name.trim());
+    const userId = authenticatedUsers.get(request);
+    if (userId !== undefined) await repository.addOrganizationMembership(organization.id, userId, 'owner');
+    return reply.code(201).send(organization);
   });
 
   app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId', async (request, reply) => {
@@ -330,6 +452,10 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const body = request.body;
     if (typeof body?.projectId !== 'string' || typeof body.name !== 'string' || typeof body.manifestId !== 'string') return reply.code(400).send({ error: 'projectId, name, and manifestId are required' });
     if (await repository.getProject(request.params.organizationId, body.projectId) === undefined) return reply.code(404).send({ error: 'project not found' });
+    if (body.manifest !== undefined) {
+      const validation = validateManifest(body.manifest);
+      if (!validation.valid) return reply.code(400).send({ error: 'manifest validation failed', errors: validation.errors });
+    }
     const test = await repository.createTest(request.params.organizationId, body.projectId, body.name.trim(), body.manifestId);
     if (body.manifest !== undefined) await repository.updateTestManifest(request.params.organizationId, test.id, body.manifest);
     return reply.code(201).send(test);
@@ -408,7 +534,12 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
     if (request.body === null || typeof request.body !== 'object' || Array.isArray(request.body)) return reply.code(400).send({ error: 'manifest object is required' });
-    if (!await repository.updateTestManifest(organizationId, request.params.id, request.body)) return reply.code(404).send({ error: 'test not found' });
+    const body = { ...(request.body as Record<string, unknown>) };
+    delete body['testId'];
+    delete body['manifestId'];
+    const validation = validateManifest(body);
+    if (!validation.valid) return reply.code(400).send({ error: 'manifest validation failed', errors: validation.errors });
+    if (!await repository.updateTestManifest(organizationId, request.params.id, body)) return reply.code(404).send({ error: 'test not found' });
     return reply.send({ testId: request.params.id, saved: true });
   });
 
@@ -422,31 +553,30 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateChangeRequestBody }>('/v1/organizations/:organizationId/change-requests', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     if (typeof request.body?.title !== 'string' || request.body.title.trim() === '') return reply.code(400).send({ error: 'title is required' });
-    const timestamp = new Date().toISOString();
-    const record: ChangeRequestRecord = { id: `change-request-${randomUUID()}`, organizationId: request.params.organizationId, title: request.body.title.trim(), description: request.body.description ?? '', status: 'open', createdAt: timestamp, updatedAt: timestamp };
-    changeRequests.set(record.id, record);
+    const record = await repository.createChangeRequest(request.params.organizationId, request.body.title.trim(), request.body.description);
     return reply.code(201).send(record);
   });
 
   app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/change-requests', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
-    return reply.send({ changeRequests: [...changeRequests.values()].filter((record) => record.organizationId === request.params.organizationId) });
+    return reply.send({ changeRequests: await repository.listChangeRequests(request.params.organizationId) });
   });
 
   app.get<{ Params: { changeRequestId: string }; Headers: TenantHeaders }>('/v1/change-requests/:changeRequestId', async (request, reply) => {
-    const record = changeRequests.get(request.params.changeRequestId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getChangeRequest(organizationId, request.params.changeRequestId);
     if (record === undefined) return reply.code(404).send({ error: 'change request not found' });
-    if (!requireTenant(request, reply, record.organizationId)) return reply;
     return reply.send(record);
   });
 
   app.patch<{ Params: { changeRequestId: string }; Headers: TenantHeaders; Body: { status?: ChangeRequestRecord['status']; description?: string } }>('/v1/change-requests/:changeRequestId', async (request, reply) => {
-    const record = changeRequests.get(request.params.changeRequestId);
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getChangeRequest(organizationId, request.params.changeRequestId);
     if (record === undefined) return reply.code(404).send({ error: 'change request not found' });
-    if (!requireTenant(request, reply, record.organizationId)) return reply;
     if (request.body?.status !== undefined && !['open', 'approved', 'rejected'].includes(request.body.status)) return reply.code(400).send({ error: 'invalid change request status' });
-    const updated: ChangeRequestRecord = { ...record, ...(request.body?.status === undefined ? {} : { status: request.body.status }), ...(request.body?.description === undefined ? {} : { description: request.body.description }), updatedAt: new Date().toISOString() };
-    changeRequests.set(updated.id, updated);
+    const updated = await repository.updateChangeRequest(organizationId, request.params.changeRequestId, { ...(request.body?.status === undefined ? {} : { status: request.body.status }), ...(request.body?.description === undefined ? {} : { description: request.body.description }) });
     return reply.send(updated);
   });
 
@@ -526,8 +656,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (run === undefined) return reply.code(404).send({ error: 'run not found' });
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     if (typeof request.body?.reason !== 'string' || request.body.reason.trim() === '') return reply.code(400).send({ error: 'reason is required' });
-    const repair: RepairRecord = { id: `repair-${randomUUID()}`, organizationId: run.organizationId, runId: run.id, reason: request.body.reason.trim(), status: 'queued', createdAt: new Date().toISOString() };
-    repairs.set(repair.id, repair);
+    const repair = await repository.createRepair(run.organizationId, run.id, request.body.reason.trim());
     return reply.code(201).send(repair);
   });
 
@@ -535,8 +664,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
     if (typeof request.body?.url !== 'string' || request.body.url.trim() === '') return reply.code(400).send({ error: 'url is required' });
-    const record: PullRequestRecord = { id: `pull-request-${randomUUID()}`, organizationId, url: request.body.url.trim(), createdAt: new Date().toISOString() };
-    pullRequests.set(record.id, record);
+    const record = await repository.createPullRequest(organizationId, request.body.url.trim());
     return reply.code(201).send(record);
   });
 
@@ -641,14 +769,13 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (typeof body?.projectId !== 'string' || typeof body.testId !== 'string' || typeof body.cron !== 'string') return reply.code(400).send({ error: 'projectId, testId, and cron are required' });
     try { validateCronExpression(body.cron); } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }); }
     if (await repository.getProject(request.params.organizationId, body.projectId) === undefined || await repository.getTest(request.params.organizationId, body.testId) === undefined) return reply.code(404).send({ error: 'project or test not found' });
-    const schedule = { id: `schedule-${randomUUID()}`, organizationId: request.params.organizationId, projectId: body.projectId, testId: body.testId, cron: validateCronExpression(body.cron), enabled: body.enabled ?? true, createdAt: new Date().toISOString() };
-    schedules.set(schedule.id, schedule);
+    const schedule = await repository.createSchedule(request.params.organizationId, body.projectId, body.testId, validateCronExpression(body.cron), body.enabled);
     return reply.code(201).send(schedule);
   });
 
   app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/schedules', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
-    return reply.send({ schedules: [...schedules.values()].filter((schedule) => schedule.organizationId === request.params.organizationId) });
+    return reply.send({ schedules: await repository.listSchedules(request.params.organizationId) });
   });
 
   app.post<{ Headers: { 'x-hub-signature-256'?: string; 'x-github-delivery'?: string; 'x-github-event'?: string }; Body: Record<string, unknown> }>('/v1/webhooks/github', async (request, reply) => {

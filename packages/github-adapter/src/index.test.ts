@@ -49,4 +49,13 @@ describe('GitHub adapter', () => {
     await expect(client.listInstallationRepositories()).resolves.toEqual([expect.objectContaining({ fullName: 'org/one' }), expect.objectContaining({ fullName: 'org/two' })]);
     expect(requests).toHaveLength(2);
   });
+
+  it('resolves the authenticated OAuth user without returning the OAuth token', async () => {
+    const client = new GitHubApiClient('oauth-token', async (input, init) => {
+      expect(String(input)).toBe('https://api.github.com/user');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer oauth-token');
+      return new Response(JSON.stringify({ id: 42, login: 'qa-user' }), { status: 200 });
+    });
+    await expect(client.getAuthenticatedUser()).resolves.toEqual({ id: 42, login: 'qa-user' });
+  });
 });

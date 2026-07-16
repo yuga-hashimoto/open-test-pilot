@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS plugin_versions (
 DO $$ DECLARE table_name text; BEGIN
   FOREACH table_name IN ARRAY ARRAY['test_results','step_results','action_results','runner_groups','environments','secrets','secret_references','storage_policies','github_checks','notifications','ai_workers','plugins','plugin_versions'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
-    EXECUTE format('DROP POLICY IF EXISTS %I_tenant_isolation ON %I', table_name, table_name);
-    EXECUTE format('CREATE POLICY %I_tenant_isolation ON %I USING (organization_id = current_setting(''app.organization_id'', true)::uuid)', table_name, table_name);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', table_name || '_tenant_isolation', table_name);
+    EXECUTE format('CREATE POLICY %I ON %I USING (organization_id = current_setting(''app.organization_id'', true)::uuid)', table_name || '_tenant_isolation', table_name);
   END LOOP;
 END $$;
