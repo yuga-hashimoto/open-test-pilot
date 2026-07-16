@@ -9,7 +9,7 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "build": "tsc --build",
-    "start": "node dist/index.js"
+    "start": "tsx dist/index.js"
   },
   "dependencies": {
     "@open-test-pilot/github-adapter": "workspace:*",
@@ -21,6 +21,7 @@
     "@fastify/cors": "^10.0.2",
     "@types/pg": "^8.20.0",
     "fastify": "^5.6.1",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "tsx": "^4.19.4"
   }
 }

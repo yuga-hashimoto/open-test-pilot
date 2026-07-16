@@ -10,10 +10,11 @@ export interface RunnerClient {
 }
 
 export function createRunnerClient(baseUrl: string, organizationId: string): RunnerClient {
-  const headers = { 'content-type': 'application/json', 'x-organization-id': organizationId };
+  const headers = { accept: 'application/json', 'x-organization-id': organizationId };
+  const jsonHeaders = { ...headers, 'content-type': 'application/json' };
   return {
     async register(name, capabilities) {
-      const response = await fetch(`${baseUrl}/v1/organizations/${organizationId}/runners`, { method: 'POST', headers, body: JSON.stringify({ name, capabilities }) });
+      const response = await fetch(`${baseUrl}/v1/organizations/${organizationId}/runners`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ name, capabilities }) });
       if (!response.ok) throw new Error(`runner registration failed with ${response.status}`);
       return await response.json() as { runnerId: string };
     },
@@ -28,11 +29,11 @@ export function createRunnerClient(baseUrl: string, organizationId: string): Run
       return body.job ?? undefined;
     },
     async complete(jobId, status) {
-      const response = await fetch(`${baseUrl}/v1/jobs/${jobId}/complete`, { method: 'POST', headers, body: JSON.stringify({ status }) });
+      const response = await fetch(`${baseUrl}/v1/jobs/${jobId}/complete`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ status }) });
       if (!response.ok) throw new Error(`job completion failed with ${response.status}`);
     },
     async uploadArtifact(runId, input) {
-      const response = await fetch(`${baseUrl}/v1/runs/${runId}/artifacts`, { method: 'POST', headers, body: JSON.stringify({ key: input.key, contentType: input.contentType, bodyBase64: Buffer.from(input.body).toString('base64') }) });
+      const response = await fetch(`${baseUrl}/v1/runs/${runId}/artifacts`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ key: input.key, contentType: input.contentType, bodyBase64: Buffer.from(input.body).toString('base64') }) });
       if (!response.ok) throw new Error(`artifact upload failed with ${response.status}`);
       const artifact = await response.json() as { id: string };
       return { artifactId: artifact.id };
