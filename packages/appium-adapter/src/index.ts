@@ -8,6 +8,7 @@ export interface MobileCapabilities {
   appPackage?: string;
   appActivity?: string;
   automationName?: 'UiAutomator2' | 'XCUITest';
+  serverUrl?: string;
 }
 
 export interface MobileNode { id?: string | undefined; text?: string | undefined; label?: string | undefined; resourceId?: string | undefined; className?: string | undefined; bounds?: string | undefined; enabled?: boolean | undefined; clickable?: boolean | undefined; }
@@ -77,7 +78,8 @@ export async function executeMobileActionsWithDriver(driver: MobileDriver, actio
 
 export async function executeMobileActions(capabilities: MobileCapabilities, actions: Array<{ type: 'tap' | 'input' | 'assertText'; locator: LocatorCandidate; value?: string }>): Promise<MobileExecutionResult> {
   const { remote } = await import('webdriverio');
-  const driver = await remote({ capabilities: buildAppiumCapabilities(capabilities) });
+  const serverUrl = new URL(capabilities.serverUrl ?? 'http://127.0.0.1:4723');
+  const driver = await remote({ protocol: serverUrl.protocol.replace(':', '') as 'http' | 'https', hostname: serverUrl.hostname, port: Number(serverUrl.port || (serverUrl.protocol === 'https:' ? 443 : 80)), path: serverUrl.pathname === '' ? '/' : serverUrl.pathname, capabilities: buildAppiumCapabilities(capabilities) });
   try { return await executeMobileActionsWithDriver(driver as unknown as MobileDriver, actions); } finally { await driver.deleteSession(); }
 }
 
