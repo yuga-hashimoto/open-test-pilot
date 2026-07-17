@@ -77,6 +77,7 @@ export interface ManifestMobileCapabilities {
   wdaConnectionTimeout?: number;
   showXcodeLog?: boolean;
   noReset?: boolean;
+  simulatorDevicesSetPath?: string;
   serverUrl?: string;
 }
 
@@ -348,6 +349,7 @@ export const manifestJsonSchema = {
             wdaConnectionTimeout: { type: 'integer', minimum: 1 },
             showXcodeLog: { type: 'boolean' },
             noReset: { type: 'boolean' },
+            simulatorDevicesSetPath: { type: 'string', minLength: 1 },
             serverUrl: { type: 'string', pattern: '^https?://[^\\s]+$' },
           },
           additionalProperties: false,

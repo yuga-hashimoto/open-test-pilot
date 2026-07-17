@@ -51,6 +51,7 @@ describe.skipIf(process.env['OPENTESTPILOT_IOS_E2E'] !== 'true')('Appium iOS int
       wdaConnectionTimeout: Number(process.env['OPENTESTPILOT_IOS_WDA_CONNECTION_TIMEOUT'] ?? 120000),
       showXcodeLog: process.env['OPENTESTPILOT_IOS_SHOW_XCODE_LOG'] !== 'false',
       noReset: process.env['OPENTESTPILOT_IOS_NO_RESET'] !== 'false',
+      ...(process.env['OPENTESTPILOT_IOS_SIMULATOR_DEVICES_SET_PATH'] === undefined ? {} : { simulatorDevicesSetPath: process.env['OPENTESTPILOT_IOS_SIMULATOR_DEVICES_SET_PATH'] }),
     };
     const selector = process.env['OPENTESTPILOT_IOS_SELECTOR'] ?? '//XCUIElementTypeApplication[@name="Settings"]';
     const result = await executeMobileManifest(capabilities, {

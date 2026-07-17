@@ -47,6 +47,7 @@ function mobileCapabilitiesLiteral(capabilities: ManifestMobileCapabilities): st
   if (capabilities.wdaConnectionTimeout !== undefined) entries.push(`'appium:wdaConnectionTimeout': ${capabilities.wdaConnectionTimeout}`);
   if (capabilities.showXcodeLog !== undefined) entries.push(`'appium:showXcodeLog': ${capabilities.showXcodeLog}`);
   if (capabilities.noReset !== undefined) entries.push(`'appium:noReset': ${capabilities.noReset}`);
+  if (capabilities.simulatorDevicesSetPath !== undefined) entries.push(`'appium:simulatorDevicesSetPath': ${quote(capabilities.simulatorDevicesSetPath)}`);
   return `{ ${entries.join(', ')} }`;
 }
 

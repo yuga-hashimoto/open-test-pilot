@@ -12,7 +12,7 @@ describe('Appium adapter', () => {
   });
 
   it('forwards iOS device, bundle, and WebDriverAgent capabilities', () => {
-    expect(buildAppiumCapabilities({ platform: 'ios', deviceName: 'iPhone 16', udid: 'simulator-1', bundleId: 'com.example.app', wdaLocalPort: 8102, useNewWDA: true, wdaLaunchTimeout: 120000, wdaConnectionTimeout: 120000, showXcodeLog: true, noReset: true })).toMatchObject({
+    expect(buildAppiumCapabilities({ platform: 'ios', deviceName: 'iPhone 16', udid: 'simulator-1', bundleId: 'com.example.app', wdaLocalPort: 8102, useNewWDA: true, wdaLaunchTimeout: 120000, wdaConnectionTimeout: 120000, showXcodeLog: true, noReset: true, simulatorDevicesSetPath: '/tmp/devices' })).toMatchObject({
       platformName: 'ios',
       'appium:udid': 'simulator-1',
       'appium:bundleId': 'com.example.app',
@@ -23,6 +23,7 @@ describe('Appium adapter', () => {
       'appium:wdaConnectionTimeout': 120000,
       'appium:showXcodeLog': true,
       'appium:noReset': true,
+      'appium:simulatorDevicesSetPath': '/tmp/devices',
     });
   });
 
