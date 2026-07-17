@@ -34,6 +34,8 @@ Optional environment variables:
 
 On a failed mobile action, the adapter records screenshot, Appium page source, current activity, and logcat artifacts when the driver exposes them. Missing driver capabilities are represented as artifacts with `unavailableReason`; they are not silently dropped.
 
+The Manifest `artifacts.screenshots` setting is honored by the mobile Local Runner: `after` captures one screenshot at each step boundary, `before-and-after` captures both sides of every action plus the step boundary, `failure-only` keeps normal runs clean while retaining failure evidence, and `none` disables normal screenshots. These artifacts are linked from the corresponding ActionResult in the report.
+
 ## Verified run
 
 On 2026-07-17, the gate was executed against the real local Android emulator

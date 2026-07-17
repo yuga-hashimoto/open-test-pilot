@@ -288,4 +288,33 @@ describe('executeMobileManifestWithDriver', () => {
     expect(artifacts.some((a) => a.unavailableReason !== undefined)).toBe(true);
     expect(artifacts.some((a) => a.type === 'mobile-screenshot' && (a.unavailableReason?.includes('does not expose') ?? false))).toBe(true);
   });
+
+  it('captures configured after screenshots and exposes them on the final action', async () => {
+    const { driver, calls } = mockDriver();
+    const result = await executeMobileManifestWithDriver(driver, {
+      id: 'android-after',
+      steps: [{ id: 'home', actions: [{ id: 'tap', type: 'mobile.tap', selector: 'id=home' }] }],
+    }, { evidenceDir: '.testpilot/appium-after', screenshotMode: 'after' });
+
+    expect(result.status).toBe('passed');
+    expect(calls).toContain('screenshot');
+    expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'screenshot/home-after.png' })]));
+    expect(result.steps[0]?.actions[0]?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'screenshot/home-after.png' })]));
+  });
+
+  it('captures before and after evidence for each mobile action', async () => {
+    const { driver, calls } = mockDriver();
+    const result = await executeMobileManifestWithDriver(driver, {
+      id: 'android-before-after',
+      steps: [{ id: 'home', actions: [{ id: 'tap', type: 'mobile.tap', selector: 'id=home' }] }],
+    }, { evidenceDir: '.testpilot/appium-before-after', screenshotMode: 'before-and-after' });
+
+    expect(result.status).toBe('passed');
+    expect(calls.filter((call) => call === 'screenshot')).toHaveLength(3);
+    expect(result.steps[0]?.actions[0]?.artifacts?.map((artifact) => artifact.path)).toEqual([
+      'screenshot/home-tap-before.png',
+      'screenshot/home-tap-after.png',
+      'screenshot/home-after.png',
+    ]);
+  });
 });

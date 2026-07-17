@@ -10,6 +10,7 @@ await cp('LICENSE', `${output}/LICENSE`);
 await cp('NOTICE', `${output}/NOTICE`);
 await cp('docs/THIRD_PARTY_LICENSES.json', `${output}/THIRD_PARTY_LICENSES.json`);
 await cp('docs/OSS_GOVERNANCE.md', `${output}/OSS_GOVERNANCE.md`);
+await cp('GOVERNANCE.md', `${output}/GOVERNANCE.md`);
 execFileSync('pnpm', ['--filter', '@open-test-pilot/cli', 'pack', '--pack-destination', output], { stdio: 'inherit' });
 const files = execFileSync('find', [output, '-type', 'f', '-maxdepth', '1', '-print'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean).sort();
 await writeFile(`${output}/release-manifest.json`, `${JSON.stringify({ product: 'open-test-pilot', version: '0.1.0', files: files.map((file) => file.replace(`${output}/`, '')) }, null, 2)}\n`);

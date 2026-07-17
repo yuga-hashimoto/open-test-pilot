@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -300,6 +300,35 @@ describe('OpenTestPilot server API', () => {
     const webhook = await app.inject({ method: 'POST', url: '/v1/webhooks/github', payload: { action: 'push' } });
     expect(webhook.statusCode).toBe(503);
     await app.close();
+  });
+
+  it('verifies, records, and deduplicates signed GitHub webhook deliveries', async () => {
+    const previousSecret = process.env['GITHUB_WEBHOOK_SECRET'];
+    process.env['GITHUB_WEBHOOK_SECRET'] = 'webhook-secret';
+    try {
+      const repository = new InMemoryTenantRepository();
+      const app = buildServer(repository);
+      const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Webhook org' } });
+      const organizationId = organization.json<{ id: string }>().id;
+      const linked = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/repositories`, headers: { 'x-organization-id': organizationId }, payload: { owner: 'octo', name: 'demo' } });
+      const body = { action: 'opened', repository: { full_name: 'octo/demo' }, pull_request: { number: 7 } };
+      const payload = JSON.stringify(body);
+      const signature = `sha256=${createHmac('sha256', 'webhook-secret').update(payload).digest('hex')}`;
+      const headers = { 'x-hub-signature-256': signature, 'x-github-delivery': 'delivery-1', 'x-github-event': 'pull_request', 'x-organization-id': organizationId };
+      const accepted = await app.inject({ method: 'POST', url: '/v1/webhooks/github', headers, payload: body });
+      expect(accepted.statusCode).toBe(202);
+      expect(accepted.json<{ processed: boolean }>().processed).toBe(true);
+      const duplicate = await app.inject({ method: 'POST', url: '/v1/webhooks/github', headers, payload: body });
+      expect(duplicate.statusCode).toBe(200);
+      expect(duplicate.json<{ duplicate: boolean }>().duplicate).toBe(true);
+      const audit = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/audit-logs`, headers: { 'x-organization-id': organizationId } });
+      expect(audit.json<{ events: Array<{ action: string; metadata: Record<string, unknown> }> }>().events).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'github.webhook.pull_request', metadata: expect.objectContaining({ pullRequestNumber: 7 }) })]));
+      expect(linked.statusCode).toBe(201);
+      await app.close();
+    } finally {
+      if (previousSecret === undefined) delete process.env['GITHUB_WEBHOOK_SECRET'];
+      else process.env['GITHUB_WEBHOOK_SECRET'] = previousSecret;
+    }
   });
 
   it('triggers an enabled schedule into the tenant queue', async () => {

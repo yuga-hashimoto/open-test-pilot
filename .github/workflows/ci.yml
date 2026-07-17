@@ -151,7 +151,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint infra/helm/opentestpilot
       - run: |
-          for file in LICENSE NOTICE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md docs/REQUIREMENT_AUDIT.md docs/OSS_GOVERNANCE.md; do
+          for file in LICENSE NOTICE GOVERNANCE.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md docs/REQUIREMENT_AUDIT.md docs/OSS_GOVERNANCE.md; do
             test -s "$file"
           done
       - run: test "$(find infra/postgres/migrations -maxdepth 1 -name '*.sql' | wc -l)" -ge 6

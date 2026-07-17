@@ -70,7 +70,8 @@ export function generateWebdriverIoTest(capabilities: MobileCapabilities, action
 }
 
 export interface MobileArtifact { type: string; path: string; mimeType?: string; unavailableReason?: string; }
-export interface MobileExecutionOptions { evidenceDir?: string; }
+export type MobileScreenshotMode = 'none' | 'failure-only' | 'after' | 'before-and-after';
+export interface MobileExecutionOptions { evidenceDir?: string; screenshotMode?: MobileScreenshotMode; }
 export interface MobileManifestExecutionOptions extends MobileExecutionOptions {
   driverFactory?: (capabilities: MobileCapabilities) => Promise<MobileDriver>;
 }
@@ -137,6 +138,20 @@ async function captureMobileEvidence(driver: MobileDriver, options: MobileExecut
   return artifacts;
 }
 
+async function captureMobileScreenshot(driver: MobileDriver, options: MobileExecutionOptions, filename: string): Promise<MobileArtifact> {
+  const relativePath = `screenshot/${filename}`;
+  const artifact: MobileArtifact = { type: 'mobile-screenshot', path: relativePath, mimeType: 'image/png' };
+  if (driver.saveScreenshot === undefined) return { ...artifact, unavailableReason: 'driver does not expose saveScreenshot' };
+  try {
+    const targetPath = join(options.evidenceDir ?? '', filename);
+    const captured = await driver.saveScreenshot(targetPath);
+    if (captured === undefined) return { ...artifact, unavailableReason: 'driver returned no screenshot path or bytes' };
+    return artifact;
+  } catch (error) {
+    return { ...artifact, unavailableReason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function executeMobileActionsWithDriver(driver: MobileDriver, actions: Array<{ type: 'tap' | 'input' | 'assertText'; locator: LocatorCandidate; value?: string }>, options: MobileExecutionOptions = {}): Promise<MobileExecutionResult> {
   const results: MobileExecutionResult['actions'] = [];
   try {
@@ -162,21 +177,23 @@ export async function executeMobileManifestWithDriver(
 ): Promise<MobileManifestResult> {
   if (options.evidenceDir !== undefined) await mkdir(options.evidenceDir, { recursive: true });
   const result: MobileManifestResult = { status: 'passed', steps: [], artifacts: [] };
+  const screenshotMode = options.screenshotMode ?? 'none';
   for (const step of manifest.steps) {
     const stepResult: MobileManifestResult['steps'][number] = { stepId: step.id, status: 'passed', actions: [] };
     for (const action of step.actions) {
       try {
+        const actionArtifacts: MobileArtifact[] = [];
+        if (screenshotMode === 'before-and-after') actionArtifacts.push(await captureMobileScreenshot(driver, options, `${step.id}-${action.id}-before.png`));
         if (action.type === 'mobile.launch') {
           // The driver boundary owns session creation; keeping the action in the result preserves the Manifest trace.
         } else if (action.type === 'mobile.back') {
           if (driver.back === undefined) throw new Error('Mobile driver does not support back');
           await driver.back();
         } else if (action.type === 'mobile.screenshot') {
-          if (driver.saveScreenshot === undefined) throw new Error('Mobile driver does not support screenshots');
           const filename = `${action.name ?? action.id}.png`;
-          const captured = await driver.saveScreenshot(join(options.evidenceDir ?? '', filename));
-          const artifact: MobileArtifact = { type: 'mobile-screenshot', path: `screenshot/${filename}`, mimeType: 'image/png', ...(captured === undefined ? { unavailableReason: 'driver returned no screenshot path or bytes' } : {}) };
+          const artifact = await captureMobileScreenshot(driver, options, filename);
           result.artifacts.push(artifact);
+          actionArtifacts.push(artifact);
         } else {
           const element = await driver.$(webdriverSelector({ strategy: 'xpath', value: action.selector ?? '', confidence: 1, source: 'Manifest selector' }));
           if (action.type === 'mobile.tap') await element.click();
@@ -187,7 +204,9 @@ export async function executeMobileManifestWithDriver(
           }
           if (action.type === 'mobile.expectText' && await element.getText() !== (action.expectedText ?? '')) throw new Error(`Expected mobile text ${action.expectedText ?? ''}`);
         }
-        stepResult.actions.push({ actionId: action.id, type: action.type, status: 'passed' });
+        if (screenshotMode === 'before-and-after') actionArtifacts.push(await captureMobileScreenshot(driver, options, `${step.id}-${action.id}-after.png`));
+        result.artifacts.push(...actionArtifacts.filter((artifact) => !result.artifacts.includes(artifact)));
+        stepResult.actions.push({ actionId: action.id, type: action.type, status: 'passed', ...(actionArtifacts.length > 0 ? { artifacts: actionArtifacts } : {}) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const evidence = await captureMobileEvidence(driver, options);
@@ -199,6 +218,12 @@ export async function executeMobileManifestWithDriver(
         result.steps.push(stepResult);
         return result;
       }
+    }
+    if (screenshotMode === 'after' || screenshotMode === 'before-and-after') {
+      const stepArtifact = await captureMobileScreenshot(driver, options, `${step.id}-after.png`);
+      result.artifacts.push(stepArtifact);
+      const lastAction = stepResult.actions[stepResult.actions.length - 1];
+      if (lastAction !== undefined) lastAction.artifacts = [...(lastAction.artifacts ?? []), stepArtifact];
     }
     result.steps.push(stepResult);
   }

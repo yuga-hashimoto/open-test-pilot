@@ -96,4 +96,18 @@ describe('testpilot CLI', () => {
     expect(await runCli(['run', manifestPath, '--actions', actionPath], output)).toBe(0);
     expect(output.join('\n')).toContain('run:');
   });
+
+  it('exports an independent generated project as a ZIP', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-export-'));
+    const manifestPath = join(directory, 'test.yaml');
+    const zipPath = join(directory, 'export.zip');
+    await writeFile(manifestPath, manifest, 'utf8');
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'export', manifestPath, '--output', zipPath], output)).toBe(0);
+    const zip = await readFile(zipPath);
+    expect(zip.subarray(0, 4).toString('hex')).toBe('504b0304');
+    expect(zip.toString('utf8')).toContain('manifest.yaml');
+    expect(zip.toString('utf8')).toContain('package.json');
+    expect(output.join('\n')).toContain(`exported: ${zipPath}`);
+  });
 });

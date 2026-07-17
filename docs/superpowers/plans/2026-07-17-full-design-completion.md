@@ -82,12 +82,15 @@
 - Modify: `package.json`
 - Modify: `docs/DEPLOYMENT.md`
 - Modify: `docs/OSS_GOVERNANCE.md`
+- Create: `GOVERNANCE.md`
 
 **Interfaces:** CI must execute lint, typecheck, unit, integration, E2E, Manifest schema, migration, generated snapshot, Docker, security, dependency-license, npm package, documentation, and example-project checks. Release output must contain npm tarballs, CLI, plugin, Docker/Compose, Helm, migration guide, changelog, and a machine-readable manifest.
 
 - [x] Add deterministic generated-code snapshot verification and run it locally.
 - [x] Add dependency license and security checks; the current audit has no high-severity findings.
 - [x] Build release artifacts and verify the CLI tarball output.
+- [x] Add root OSS governance, include it in release artifacts, and verify it in CI.
+- [x] Add independent project/ZIP export for generated Manifest code and validate the archive contents.
 - [x] Add the same quality gates to GitHub Actions and validate the workflow YAML locally.
 
 ### Task 5: Execute all available acceptance scenarios and audit evidence

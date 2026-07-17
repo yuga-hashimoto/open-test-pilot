@@ -611,6 +611,7 @@ export function createConfiguredArtifactStore(): StorageAdapter { if (process.en
 export function buildServer(repository: TenantRepository = createConfiguredRepository(), executionQueue: ExecutionQueue = createConfiguredExecutionQueue(), artifactStore: StorageAdapter = createConfiguredArtifactStore()): FastifyInstance {
   const app = Fastify({ logger: false });
   const oauthStates = new Set<string>();
+  const webhookDeliveries = new Set<string>();
   const authenticatedUsers = new WeakMap<object, string>();
   const validateManifest = createManifestValidator();
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
@@ -1384,13 +1385,34 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.code(202).send({ scheduleId: schedule.id, runId: run.id, status: run.status, trigger: 'schedule' });
   });
 
-  app.post<{ Headers: { 'x-hub-signature-256'?: string; 'x-github-delivery'?: string; 'x-github-event'?: string }; Body: Record<string, unknown> }>('/v1/webhooks/github', async (request, reply) => {
+  app.post<{ Headers: { 'x-hub-signature-256'?: string; 'x-github-delivery'?: string; 'x-github-event'?: string } & TenantHeaders; Body: Record<string, unknown> }>('/v1/webhooks/github', async (request, reply) => {
     const secret = process.env['GITHUB_WEBHOOK_SECRET'];
     if (secret === undefined) return reply.code(503).send({ error: 'GitHub webhook verification is not configured' });
     const signature = request.headers['x-hub-signature-256'];
     const deliveryId = request.headers['x-github-delivery'];
     if (signature === undefined || deliveryId === undefined || !verifyWebhookSignature(JSON.stringify(request.body), signature, secret)) return reply.code(401).send({ error: 'invalid webhook signature' });
-    return reply.code(202).send({ accepted: true, deliveryId, event: request.headers['x-github-event'] ?? 'unknown' });
+    const event = request.headers['x-github-event'] ?? 'unknown';
+    if (webhookDeliveries.has(deliveryId)) return reply.code(200).send({ accepted: true, duplicate: true, deliveryId, event });
+    webhookDeliveries.add(deliveryId);
+    const repositoryPayload = request.body['repository'];
+    const repositoryObject = repositoryPayload !== null && typeof repositoryPayload === 'object' ? repositoryPayload as Record<string, unknown> : undefined;
+    const pullRequestPayload = request.body['pull_request'];
+    const pullRequestObject = pullRequestPayload !== null && typeof pullRequestPayload === 'object' ? pullRequestPayload as Record<string, unknown> : undefined;
+    const fullName = typeof repositoryObject?.['full_name'] === 'string' ? repositoryObject['full_name'] : undefined;
+    const organizationId = tenantId(request);
+    let processed = false;
+    if (organizationId !== undefined && await repository.getOrganization(organizationId) !== undefined && fullName !== undefined) {
+      const linkedRepository = (await repository.listRepositories(organizationId)).find((record) => record.fullName === fullName);
+      await repository.recordAuditEvent(organizationId, `github.webhook.${event}`, 'repository', linkedRepository?.id, {
+        deliveryId,
+        action: typeof request.body['action'] === 'string' ? request.body['action'] : undefined,
+        ref: typeof request.body['ref'] === 'string' ? request.body['ref'] : undefined,
+        after: typeof request.body['after'] === 'string' ? request.body['after'] : undefined,
+        pullRequestNumber: typeof pullRequestObject?.['number'] === 'number' ? pullRequestObject['number'] : undefined,
+      });
+      processed = linkedRepository !== undefined;
+    }
+    return reply.code(202).send({ accepted: true, processed, deliveryId, event, ...(fullName === undefined ? { reason: 'repository metadata missing' } : {}), ...(organizationId === undefined ? { reason: 'organization context unavailable; configure a trusted tenant header or gateway mapping' } : {}) });
   });
 
   app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: Object.fromEntries(Object.entries({
