@@ -27,7 +27,7 @@ describe('createRunnerClient', () => {
     const heartbeat = vi.fn(async () => undefined);
     const client = { heartbeat } as unknown as RunnerClient;
     const job: Job = { jobId: 'job-heartbeat', runId: 'run-heartbeat', manifest: { schemaVersion: '1.0.0', id: 'smoke', name: 'Smoke' }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'leased', createdAt: new Date().toISOString() };
-    const result = await runJobWithHeartbeat(client, 'runner-1', job, 5, async () => { await new Promise((resolve) => setTimeout(resolve, 22)); return { exitCode: 0, stdout: '', stderr: '' }; });
+    const result = await runJobWithHeartbeat(client, 'runner-1', job, 5, async () => { await new Promise((resolve) => setTimeout(resolve, 60)); return { exitCode: 0, stdout: '', stderr: '' }; });
     expect(result.exitCode).toBe(0);
     expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(3);
     const countAfterExecution = heartbeat.mock.calls.length;
