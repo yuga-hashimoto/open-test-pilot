@@ -35,6 +35,11 @@ export function buildAppiumCapabilities(input: MobileCapabilities): Record<strin
   return { platformName: input.platform, 'appium:deviceName': input.deviceName, ...(input.udid === undefined ? {} : { 'appium:udid': input.udid }), ...(input.platformVersion === undefined ? {} : { 'appium:platformVersion': input.platformVersion }), ...(input.app === undefined ? {} : { 'appium:app': input.app }), ...(input.bundleId === undefined ? {} : { 'appium:bundleId': input.bundleId }), ...(input.appPackage === undefined ? {} : { 'appium:appPackage': input.appPackage }), ...(input.appActivity === undefined ? {} : { 'appium:appActivity': input.appActivity }), 'appium:automationName': input.automationName ?? defaults.automationName, ...(input.wdaLocalPort === undefined ? {} : { 'appium:wdaLocalPort': input.wdaLocalPort }), ...(input.useNewWDA === undefined ? {} : { 'appium:useNewWDA': input.useNewWDA }), ...(input.wdaLaunchTimeout === undefined ? {} : { 'appium:wdaLaunchTimeout': input.wdaLaunchTimeout }), ...(input.wdaConnectionTimeout === undefined ? {} : { 'appium:wdaConnectionTimeout': input.wdaConnectionTimeout }), ...(input.showXcodeLog === undefined ? {} : { 'appium:showXcodeLog': input.showXcodeLog }), ...(input.noReset === undefined ? {} : { 'appium:noReset': input.noReset }), ...(input.simulatorDevicesSetPath === undefined ? {} : { 'appium:simulatorDevicesSetPath': input.simulatorDevicesSetPath }) };
 }
 
+function appiumSessionTimeout(capabilities: MobileCapabilities): number {
+  const wdaTimeout = Math.max(capabilities.wdaLaunchTimeout ?? 120_000, capabilities.wdaConnectionTimeout ?? 120_000);
+  return wdaTimeout + 60_000;
+}
+
 export function parseAndroidUiDump(xml: string): MobileNode[] {
   const nodes: MobileNode[] = [];
   for (const match of xml.matchAll(/<node\s+([^>]+?)\s*\/?>(?:<\/node>)?/g)) {
@@ -243,7 +248,7 @@ export async function executeMobileManifest(
     } else {
       const { remote } = await import('webdriverio');
       const serverUrl = new URL(capabilities.serverUrl ?? 'http://127.0.0.1:4723');
-      driver = await remote({ protocol: serverUrl.protocol.replace(':', '') as 'http' | 'https', hostname: serverUrl.hostname, port: Number(serverUrl.port || (serverUrl.protocol === 'https:' ? 443 : 80)), path: serverUrl.pathname === '' ? '/' : serverUrl.pathname, capabilities: buildAppiumCapabilities(capabilities) }) as unknown as MobileDriver;
+      driver = await remote({ protocol: serverUrl.protocol.replace(':', '') as 'http' | 'https', hostname: serverUrl.hostname, port: Number(serverUrl.port || (serverUrl.protocol === 'https:' ? 443 : 80)), path: serverUrl.pathname === '' ? '/' : serverUrl.pathname, connectionRetryTimeout: appiumSessionTimeout(capabilities), capabilities: buildAppiumCapabilities(capabilities) }) as unknown as MobileDriver;
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -259,7 +264,7 @@ export async function executeMobileManifest(
 export async function executeMobileActions(capabilities: MobileCapabilities, actions: Array<{ type: 'tap' | 'input' | 'assertText'; locator: LocatorCandidate; value?: string }>): Promise<MobileExecutionResult> {
   const { remote } = await import('webdriverio');
   const serverUrl = new URL(capabilities.serverUrl ?? 'http://127.0.0.1:4723');
-  const driver = await remote({ protocol: serverUrl.protocol.replace(':', '') as 'http' | 'https', hostname: serverUrl.hostname, port: Number(serverUrl.port || (serverUrl.protocol === 'https:' ? 443 : 80)), path: serverUrl.pathname === '' ? '/' : serverUrl.pathname, capabilities: buildAppiumCapabilities(capabilities) });
+  const driver = await remote({ protocol: serverUrl.protocol.replace(':', '') as 'http' | 'https', hostname: serverUrl.hostname, port: Number(serverUrl.port || (serverUrl.protocol === 'https:' ? 443 : 80)), path: serverUrl.pathname === '' ? '/' : serverUrl.pathname, connectionRetryTimeout: appiumSessionTimeout(capabilities), capabilities: buildAppiumCapabilities(capabilities) });
   try { return await executeMobileActionsWithDriver(driver as unknown as MobileDriver, actions); } finally { await driver.deleteSession(); }
 }
 
