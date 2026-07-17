@@ -119,8 +119,13 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: docker/setup-buildx-action@v3
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:artifacts
+      - run: docker build -f infra/docker/Dockerfile.server -t opentestpilot-server:${GITHUB_REF_NAME} .
+      - run: docker build -f infra/docker/Dockerfile.runner -t opentestpilot-runner:${GITHUB_REF_NAME} .
+      - run: docker build -f infra/docker/Dockerfile.scheduler -t opentestpilot-scheduler:${GITHUB_REF_NAME} .
+      - run: docker build -f infra/docker/Dockerfile.ai-worker -t opentestpilot-ai-worker:${GITHUB_REF_NAME} .
       - uses: actions/upload-artifact@v4
         with:
           name: open-test-pilot-release
@@ -153,7 +158,7 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint infra/helm/opentestpilot
       - run: |
-          for file in LICENSE NOTICE GOVERNANCE.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md docs/REQUIREMENT_AUDIT.md docs/OSS_GOVERNANCE.md; do
+          for file in LICENSE NOTICE GOVERNANCE.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md docs/REQUIREMENT_AUDIT.md docs/OSS_GOVERNANCE.md docs/MIGRATION.md; do
             test -s "$file"
           done
       - run: test "$(find infra/postgres/migrations -maxdepth 1 -name '*.sql' | wc -l)" -ge 6

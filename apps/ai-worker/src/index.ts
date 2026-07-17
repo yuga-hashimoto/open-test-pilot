@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AgentProtocolVersion, validateAgentResult, type AgentOperation, type AgentRequest, type AgentResult } from '@open-test-pilot/agent-protocol';
+import { createGitHubInstallationToken, GitHubApiClient } from '@open-test-pilot/github-adapter';
+import { executeRepairWorkflow, type WorkflowCheck } from './workflow.js';
+import type { RepairPublisher } from './repair.js';
 
 interface CommandOutput { stdout: string; stderr: string; }
 
@@ -182,6 +185,11 @@ export interface AiWorkerDaemonOptions {
   pollIntervalMs?: number;
   worker?: Pick<CliAgentWorker, 'handleInDirectory'>;
   workspace?: { prepare(request: AgentRequest, rootDirectory: string): Promise<string> };
+  repairWorkflow?: {
+    validate(cwd: string, request: AgentRequest): Promise<WorkflowCheck>;
+    run(cwd: string, request: AgentRequest): Promise<WorkflowCheck>;
+    publisher?: RepairPublisher;
+  };
 }
 
 export function createAiWorkerApiClient(baseUrl: string, organizationId: string, fetcher: typeof fetch = fetch, sessionToken?: string): AiWorkerApiClient {
@@ -240,13 +248,74 @@ async function processAiWorkerJob(options: AiWorkerDaemonOptions, api: AiWorkerA
   if (job === undefined) return false;
   try {
     const request = parseAgentRequest(job.request);
-    const workspace = options.workspace === undefined ? await prepareWorkerWorkspace(request, options.rootDirectory, options.gitToken) : await options.workspace.prepare(request, options.rootDirectory);
-    const result = await worker.handleInDirectory(request, workspace);
-    await api.complete(job.id, result.status === 'completed' ? 'completed' : 'failed', result as unknown as Record<string, unknown>);
+    if (request.operation === 'repair' && options.repairWorkflow !== undefined) {
+      const result = await executeRepairWorkflow(request, {
+        rootDirectory: options.rootDirectory,
+        workspace: options.workspace ?? { prepare: (actualRequest, rootDirectory) => prepareWorkerWorkspace(actualRequest, rootDirectory, options.gitToken) },
+        worker,
+        validate: options.repairWorkflow.validate,
+        run: options.repairWorkflow.run,
+        ...(options.policy === undefined ? {} : { policy: options.policy }),
+        ...(options.repairWorkflow.publisher === undefined ? {} : { publisher: options.repairWorkflow.publisher }),
+      });
+      await api.complete(job.id, result.agent.status === 'completed' ? 'completed' : 'failed', result as unknown as Record<string, unknown>);
+    } else {
+      const workspace = options.workspace === undefined ? await prepareWorkerWorkspace(request, options.rootDirectory, options.gitToken) : await options.workspace.prepare(request, options.rootDirectory);
+      const result = await worker.handleInDirectory(request, workspace);
+      await api.complete(job.id, result.status === 'completed' ? 'completed' : 'failed', result as unknown as Record<string, unknown>);
+    }
   } catch (error) {
     await api.complete(job.id, 'failed', { error: error instanceof Error ? error.message : String(error) });
   }
   return true;
+}
+
+async function cliRepairCheck(command: string[], cwd: string): Promise<WorkflowCheck> {
+  try {
+    await runCommand(command[0] ?? 'pnpm', command.slice(1), cwd, 300_000);
+    return { passed: true };
+  } catch (error) {
+    return { passed: false, message: errorMessage(error) };
+  }
+}
+
+function createGitHubRepairPublisherFromEnvironment(): RepairPublisher | undefined {
+  const appId = process.env['GITHUB_APP_ID'];
+  const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+  const installationIdValue = process.env['GITHUB_INSTALLATION_ID'];
+  const installationId = installationIdValue === undefined ? undefined : Number(installationIdValue);
+  if (appId === undefined || privateKeyPath === undefined || installationId === undefined || !Number.isSafeInteger(installationId) || installationId <= 0) return undefined;
+  const configuredAppId = appId;
+  const configuredPrivateKeyPath = privateKeyPath;
+  const configuredInstallationId = installationId;
+  async function client(): Promise<GitHubApiClient> {
+    const privateKey = await readFile(configuredPrivateKeyPath, 'utf8');
+    const token = await createGitHubInstallationToken(configuredInstallationId, { appId: configuredAppId, privateKey });
+    return new GitHubApiClient(token.token);
+  }
+  return {
+    async createBranch(owner, repository, branch, baseSha) { await (await client()).createBranch(owner, repository, branch, baseSha); },
+    async commitFile(owner, repository, input) { return await (await client()).commitFile(owner, repository, input); },
+    async createPullRequest(owner, repository, input) { return await (await client()).createPullRequest(owner, repository, input); },
+  };
+}
+
+function createCliRepairWorkflow(): AiWorkerDaemonOptions['repairWorkflow'] {
+  if (process.env['OPENTESTPILOT_REPAIR_WORKFLOW'] !== 'true') return undefined;
+  const publisher = createGitHubRepairPublisherFromEnvironment();
+  return {
+    async validate(cwd, request) {
+      const manifestPath = request.requestArtifacts?.find((path) => path.endsWith('.yaml') || path.endsWith('.yml'));
+      if (manifestPath === undefined) return { passed: false, message: 'repair request must include a YAML Manifest artifact' };
+      return await cliRepairCheck(['pnpm', 'testpilot', 'manifest', 'validate', manifestPath], cwd);
+    },
+    async run(cwd, request) {
+      const manifestPath = request.requestArtifacts?.find((path) => path.endsWith('.yaml') || path.endsWith('.yml'));
+      if (manifestPath === undefined) return { passed: false, message: 'repair request must include a YAML Manifest artifact' };
+      return await cliRepairCheck(['pnpm', 'testpilot', 'run', manifestPath], cwd);
+    },
+    ...(publisher === undefined ? {} : { publisher }),
+  };
 }
 
 export async function runAiWorkerDaemon(options: AiWorkerDaemonOptions, signal?: AbortSignal): Promise<void> {
@@ -283,7 +352,8 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     process.once('SIGINT', () => abortController.abort());
     const sessionToken = process.env['OPENTESTPILOT_SESSION_TOKEN'];
     const gitToken = process.env['OPENTESTPILOT_GIT_TOKEN'];
-    await runAiWorkerDaemon({ baseUrl, organizationId, name: workerName, rootDirectory: cwd, policy, worker, ...(sessionToken === undefined ? {} : { sessionToken }), ...(gitToken === undefined ? {} : { gitToken }), pollIntervalMs: Number(process.env['OPENTESTPILOT_WORKER_POLL_MS'] ?? 5_000) }, abortController.signal);
+    const repairWorkflow = createCliRepairWorkflow();
+    await runAiWorkerDaemon({ baseUrl, organizationId, name: workerName, rootDirectory: cwd, policy, worker, ...(sessionToken === undefined ? {} : { sessionToken }), ...(gitToken === undefined ? {} : { gitToken }), ...(repairWorkflow === undefined ? {} : { repairWorkflow }), pollIntervalMs: Number(process.env['OPENTESTPILOT_WORKER_POLL_MS'] ?? 5_000) }, abortController.signal);
   } else {
     const worker = new ClaudeCodeWorker({ cwd });
     process.stdin.setEncoding('utf8');

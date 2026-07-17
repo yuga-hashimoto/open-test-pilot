@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentResult } from '@open-test-pilot/agent-protocol';
 import { createAiWorkerApiClient, runAiWorkerOnce, type AiWorkerApiClient } from './index.js';
@@ -67,5 +70,37 @@ describe('AI Worker daemon', () => {
     const api: AiWorkerApiClient = { async registerWorker() { return { id: 'worker-1' }; }, async heartbeat() {}, async lease() { return { id: 'job-1', operation: 'repair', request: { requestId: 'bad' } }; }, async complete(jobId, status) { completed.push(`${jobId}:${status}`); } };
     await expect(runAiWorkerOnce({ baseUrl: 'http://server.test', organizationId: 'org-1', name: 'worker', rootDirectory: '/tmp/worker' }, api)).resolves.toBe(true);
     expect(completed).toEqual(['job-1:failed']);
+  });
+
+  it('runs the repair workflow through the daemon before completing the job', async () => {
+    const workspaceDirectory = await mkdtemp(join(tmpdir(), 'opentestpilot-daemon-repair-'));
+    await mkdir(join(workspaceDirectory, 'tests'), { recursive: true });
+    await writeFile(join(workspaceDirectory, 'tests/login.yaml'), 'name: Original\n', 'utf8');
+    const request = { requestId: 'repair-daemon-1', protocolVersion: '1.0.0', operation: 'repair', repository: { url: 'https://github.com/example/repo.git', branch: 'main', commit: 'abc123' }, constraints: { forbidAppCodeChanges: true }, requestArtifacts: ['tests/login.yaml'] };
+    const calls: string[] = [];
+    const api: AiWorkerApiClient = {
+      async registerWorker() { return { id: 'worker-1' }; },
+      async heartbeat() {},
+      async lease() { return { id: 'job-1', operation: 'repair', request }; },
+      async complete(_jobId, status, result) { calls.push(`complete:${status}:${JSON.stringify(result)}`); },
+    };
+    await expect(runAiWorkerOnce({
+      baseUrl: 'http://server.test', organizationId: 'org-1', name: 'worker', rootDirectory: workspaceDirectory,
+      policy: { allowedOperations: ['repair'], maxRetries: 2, allowPublish: true },
+      workspace: { async prepare() { return workspaceDirectory; } },
+      worker: { async handleInDirectory() { return { requestId: request.requestId, protocolVersion: '1.0.0' as const, status: 'completed' as const, findings: [], proposedChanges: { manifest: 'name: Repaired\n' }, pullRequestIntent: { title: 'Repair login', branch: 'ignored' } }; } },
+      repairWorkflow: {
+        async validate(cwd) { calls.push(`validate:${await readFile(join(cwd, 'tests/login.yaml'), 'utf8')}`); return { passed: true }; },
+        async run(cwd) { calls.push(`run:${await readFile(join(cwd, 'tests/login.yaml'), 'utf8')}`); return { passed: true }; },
+        publisher: {
+          async createBranch(_owner, _repository, branch) { calls.push(`branch:${branch}`); },
+          async commitFile(_owner, _repository, input) { calls.push(`commit:${input.path}`); return { commitSha: 'new-sha' }; },
+          async createPullRequest(_owner, _repository, input) { calls.push(`pr:${input.head}`); return { number: 1, htmlUrl: 'https://github.com/example/repo/pull/1', head: input.head, base: input.base }; },
+        },
+      },
+    }, api)).resolves.toBe(true);
+    expect(calls.slice(0, 5)).toEqual(['validate:name: Repaired\n', 'run:name: Repaired\n', 'branch:testpilot/repair/repair-daemon-1', 'commit:tests/login.yaml', 'pr:testpilot/repair/repair-daemon-1']);
+    expect(calls[5]).toContain('complete:completed:');
+    expect(calls[5]).toContain('"pullRequest"');
   });
 });
