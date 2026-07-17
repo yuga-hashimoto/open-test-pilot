@@ -58,4 +58,55 @@ describe('web API client', () => {
     expect(calls[1]?.init?.method).toBe('POST');
     expect(calls[1]?.init?.body).toContain('testpilot/repair');
   });
+
+  it('loads and updates the tenant administration surface', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      const url = String(input);
+      const body = url.endsWith('/projects') ? { projects: [] }
+        : url.endsWith('/members') ? { members: [] }
+          : url.endsWith('/audit-logs') ? { events: [] }
+            : url.endsWith('/storage-policy') ? { organizationId: 'org-1', successRetentionDays: 30, failureRetentionDays: 180, fixedRetention: false, generatedCodeRetentionDays: 30, updatedAt: new Date().toISOString() }
+              : { workers: [] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    await api.listProjects();
+    await api.listMembers();
+    await api.listAuditLogs();
+    await api.getStoragePolicy();
+    await api.updateStoragePolicy({ successRetentionDays: 7 });
+    await api.listAiWorkers();
+    expect(calls.map((call) => call.url)).toEqual(expect.arrayContaining([
+      'https://pilot.test/v1/organizations/org-1/projects',
+      'https://pilot.test/v1/organizations/org-1/members',
+      'https://pilot.test/v1/organizations/org-1/audit-logs',
+      'https://pilot.test/v1/organizations/org-1/storage-policy',
+      'https://pilot.test/v1/organizations/org-1/ai-workers',
+    ]));
+    expect(calls.find((call) => call.url.endsWith('/storage-policy') && call.init?.method === 'PUT')?.init?.body).toContain('7');
+  });
+
+  it('creates, lists, and rotates secrets without putting values in client state', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      const url = String(input);
+      const body = url.endsWith('/secrets') ? { secrets: [{ id: 'secret-1', name: 'token', provider: 'builtin', maskedValue: 'to****en', organizationId: 'org-1', createdAt: new Date().toISOString() }] } : { id: 'secret-1', name: 'token', provider: 'builtin', maskedValue: 'ro****ed', organizationId: 'org-1', createdAt: new Date().toISOString() };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const created = await api.createSecret({ name: 'token', provider: 'builtin', value: 'secret-value' });
+    expect(created).not.toHaveProperty('value');
+    await api.listSecrets();
+    await api.rotateSecret('secret-1', 'rotated-value');
+    expect(calls.map((call) => call.url)).toEqual(expect.arrayContaining(['https://pilot.test/v1/organizations/org-1/secrets', 'https://pilot.test/v1/secrets/secret-1/rotate']));
+    expect(calls.find((call) => call.url.endsWith('/rotate'))?.init?.body).toContain('rotated-value');
+  });
+
+  it('cancels a queued run through the job endpoint', async () => {
+    let requested = '';
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input) => { requested = String(input); return new Response(JSON.stringify({ runId: 'run-1', status: 'cancelled' }), { status: 200 }); });
+    await expect(api.cancelRun('run-1')).resolves.toEqual({ runId: 'run-1', status: 'cancelled' });
+    expect(requested).toBe('https://pilot.test/v1/jobs/job-run-1/cancel');
+  });
 });

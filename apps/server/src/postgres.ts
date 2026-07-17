@@ -1,6 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
-import type { ArtifactMetadata, ChangeRequestRecord, Organization, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, ServerRunStatus, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -66,6 +66,13 @@ export class PostgresTenantRepository implements TenantRepository {
     return result.rows[0]?.exists ?? false;
   }
 
+  async listOrganizationMembers(organizationId: string): Promise<OrganizationMemberRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ organization_id: string; user_id: string; github_user_id: string; login: string; role: string; created_at: Date }>('SELECT om.organization_id, om.user_id, u.github_user_id, u.login, om.role, om.created_at FROM organization_memberships om INNER JOIN users u ON u.id = om.user_id WHERE om.organization_id = $1 ORDER BY om.created_at, om.user_id', [organizationId]);
+      return result.rows.map((row) => ({ organizationId: row.organization_id, userId: row.user_id, githubUserId: row.github_user_id, login: row.login, role: row.role, createdAt: dateValue(row.created_at) }));
+    });
+  }
+
   async createOrganization(name: string): Promise<Organization> {
     const result = await this.pool.query<{ id: string; name: string; created_at: Date }>('INSERT INTO organizations (name) VALUES ($1) RETURNING id, name, created_at', [name]);
     return organizationFromRow(requiredRow(result.rows[0]));
@@ -80,6 +87,13 @@ export class PostgresTenantRepository implements TenantRepository {
     return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ id: string; organization_id: string; name: string; created_at: Date }>('INSERT INTO projects (organization_id, name) VALUES ($1, $2) RETURNING id, organization_id, name, created_at', [organizationId, name]);
       return projectFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listProjects(organizationId: string): Promise<Project[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; name: string; created_at: Date }>('SELECT id, organization_id, name, created_at FROM projects WHERE organization_id = $1 ORDER BY created_at DESC', [organizationId]);
+      return result.rows.map(projectFromRow);
     });
   }
 
@@ -217,6 +231,88 @@ export class PostgresTenantRepository implements TenantRepository {
   async recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): Promise<void> {
     await this.tenantQuery(organizationId, async (client) => {
       await client.query('INSERT INTO audit_logs (organization_id, action, resource_type, resource_id, metadata) VALUES ($1, $2, $3, $4, $5::jsonb)', [organizationId, action, resourceType, resourceId ?? null, JSON.stringify(metadata)]);
+    });
+  }
+
+  async listAuditEvents(organizationId: string): Promise<AuditEventRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; action: string; resource_type: string; resource_id: string | null; metadata: Record<string, unknown>; created_at: Date }>('SELECT id, organization_id, action, resource_type, resource_id, metadata, created_at FROM audit_logs WHERE organization_id = $1 ORDER BY created_at DESC, id DESC', [organizationId]);
+      return result.rows.map((row) => ({ id: row.id, organizationId: row.organization_id, action: row.action, resourceType: row.resource_type, ...(row.resource_id === null ? {} : { resourceId: row.resource_id }), metadata: row.metadata, createdAt: dateValue(row.created_at) }));
+    });
+  }
+
+  async getStoragePolicy(organizationId: string): Promise<StoragePolicyRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }>('SELECT organization_id, success_retention_days, failure_retention_days, fixed_retention, generated_code_retention_days, capacity_bytes, updated_at FROM storage_policies WHERE organization_id = $1', [organizationId]);
+      const row = result.rows[0];
+      if (row === undefined) {
+        const inserted = await client.query<{ organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }>('INSERT INTO storage_policies (organization_id) VALUES ($1) RETURNING organization_id, success_retention_days, failure_retention_days, fixed_retention, generated_code_retention_days, capacity_bytes, updated_at', [organizationId]);
+        return storagePolicyFromRow(requiredRow(inserted.rows[0]));
+      }
+      return storagePolicyFromRow(row);
+    });
+  }
+
+  async updateStoragePolicy(organizationId: string, patch: Partial<Omit<StoragePolicyRecord, 'organizationId' | 'updatedAt'>>): Promise<StoragePolicyRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const currentResult = await client.query<{ organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }>('SELECT organization_id, success_retention_days, failure_retention_days, fixed_retention, generated_code_retention_days, capacity_bytes, updated_at FROM storage_policies WHERE organization_id = $1', [organizationId]);
+      const current = currentResult.rows[0] === undefined
+        ? storagePolicyFromRow(requiredRow((await client.query<{ organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }>('INSERT INTO storage_policies (organization_id) VALUES ($1) RETURNING organization_id, success_retention_days, failure_retention_days, fixed_retention, generated_code_retention_days, capacity_bytes, updated_at', [organizationId])).rows[0]))
+        : storagePolicyFromRow(currentResult.rows[0]);
+      const next = { ...current, ...patch };
+      const result = await client.query<{ organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }>('UPDATE storage_policies SET success_retention_days = $2, failure_retention_days = $3, fixed_retention = $4, generated_code_retention_days = $5, capacity_bytes = $6, updated_at = now() WHERE organization_id = $1 RETURNING organization_id, success_retention_days, failure_retention_days, fixed_retention, generated_code_retention_days, capacity_bytes, updated_at', [organizationId, next.successRetentionDays, next.failureRetentionDays, next.fixedRetention, next.generatedCodeRetentionDays, next.capacityBytes ?? null]);
+      return storagePolicyFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async createAiWorker(organizationId: string, name: string, policy: Record<string, unknown>): Promise<AiWorkerRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }>('INSERT INTO ai_workers (organization_id, name, policy) VALUES ($1, $2, $3::jsonb) RETURNING id, organization_id, name, policy, last_heartbeat_at, created_at', [organizationId, name, JSON.stringify(policy)]);
+      return aiWorkerFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listAiWorkers(organizationId: string): Promise<AiWorkerRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }>('SELECT id, organization_id, name, policy, last_heartbeat_at, created_at FROM ai_workers WHERE organization_id = $1 ORDER BY created_at DESC', [organizationId]);
+      return result.rows.map(aiWorkerFromRow);
+    });
+  }
+
+  async heartbeatAiWorker(organizationId: string, id: string): Promise<AiWorkerRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }>('UPDATE ai_workers SET last_heartbeat_at = now() WHERE organization_id = $1 AND id = $2 RETURNING id, organization_id, name, policy, last_heartbeat_at, created_at', [organizationId, id]);
+      return result.rows[0] === undefined ? undefined : aiWorkerFromRow(result.rows[0]);
+    });
+  }
+
+  async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const encryptedValue = input.value === undefined ? null : encryptSecretValue(input.value, secretEncryptionKey());
+      const result = await client.query<SecretRow>('INSERT INTO secrets (organization_id, project_id, environment_id, name, provider, external_reference, encrypted_value, rotated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 IS NULL THEN NULL ELSE now() END) RETURNING id, organization_id, project_id, environment_id, name, provider, external_reference, encrypted_value, rotated_at, created_at', [organizationId, input.projectId ?? null, input.environmentId ?? null, input.name, input.provider, input.externalReference ?? null, encryptedValue]);
+      return secretFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listSecrets(organizationId: string): Promise<SecretRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<SecretRow>('SELECT id, organization_id, project_id, environment_id, name, provider, external_reference, encrypted_value, rotated_at, created_at FROM secrets WHERE organization_id = $1 ORDER BY created_at DESC, id DESC', [organizationId]);
+      return result.rows.map((row) => secretFromRow(row));
+    });
+  }
+
+  async rotateSecret(organizationId: string, id: string, value: string): Promise<SecretRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<SecretRow>('UPDATE secrets SET encrypted_value = $3, rotated_at = now() WHERE organization_id = $1 AND id = $2 RETURNING id, organization_id, project_id, environment_id, name, provider, external_reference, encrypted_value, rotated_at, created_at', [organizationId, id, encryptSecretValue(value, secretEncryptionKey())]);
+      return result.rows[0] === undefined ? undefined : secretFromRow(result.rows[0], value);
+    });
+  }
+
+  async getSecretValue(organizationId: string, id: string): Promise<string | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ encrypted_value: string | null }>('SELECT encrypted_value FROM secrets WHERE organization_id = $1 AND id = $2', [organizationId, id]);
+      const value = result.rows[0]?.encrypted_value;
+      return value === null || value === undefined ? undefined : decryptSecretValue(value, secretEncryptionKey());
     });
   }
 
@@ -367,6 +463,14 @@ function requiredRow<T>(row: T | undefined): T { if (row === undefined) throw ne
 function organizationFromRow(row: { id: string; name: string; created_at: Date }): Organization { return { id: row.id, name: row.name, createdAt: dateValue(row.created_at) }; }
 function projectFromRow(row: { id: string; organization_id: string; name: string; created_at: Date }): Project { return { id: row.id, organizationId: row.organization_id, name: row.name, createdAt: dateValue(row.created_at) }; }
 function testFromRow(row: { id: string; organization_id: string; project_id: string; name: string; manifest_id: string; created_at: Date }): TestRecord { return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, name: row.name, manifestId: row.manifest_id, createdAt: dateValue(row.created_at) }; }
+function storagePolicyFromRow(row: { organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }): StoragePolicyRecord { return { organizationId: row.organization_id, successRetentionDays: row.success_retention_days, failureRetentionDays: row.failure_retention_days, fixedRetention: row.fixed_retention, generatedCodeRetentionDays: row.generated_code_retention_days, ...(row.capacity_bytes === null ? {} : { capacityBytes: Number(row.capacity_bytes) }), updatedAt: dateValue(row.updated_at) }; }
+function aiWorkerFromRow(row: { id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }): AiWorkerRecord { return { id: row.id, organizationId: row.organization_id, name: row.name, policy: row.policy, ...(row.last_heartbeat_at === null ? {} : { lastHeartbeatAt: dateValue(row.last_heartbeat_at) }), createdAt: dateValue(row.created_at) }; }
+interface SecretRow { id: string; organization_id: string; project_id: string | null; environment_id: string | null; name: string; provider: string; external_reference: string | null; encrypted_value: string | null; rotated_at: Date | null; created_at: Date; }
+function secretFromRow(row: SecretRow, rotatedValue?: string): SecretRecord { return { id: row.id, organizationId: row.organization_id, ...(row.project_id === null ? {} : { projectId: row.project_id }), ...(row.environment_id === null ? {} : { environmentId: row.environment_id }), name: row.name, provider: row.provider, ...(row.external_reference === null ? {} : { externalReference: row.external_reference }), maskedValue: rotatedValue === undefined ? row.encrypted_value === null ? '[EXTERNAL]' : '[REDACTED]' : maskValue(rotatedValue), ...(row.rotated_at === null ? {} : { rotatedAt: dateValue(row.rotated_at) }), createdAt: dateValue(row.created_at) }; }
+function maskValue(value: string): string { return value.length <= 4 ? '[REDACTED]' : `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`; }
+function secretEncryptionKey(): string { return process.env['OPENTESTPILOT_SECRET_KEY'] ?? 'open-test-pilot-development-key'; }
+function encryptSecretValue(value: string, key: string): string { const salt = randomBytes(16); const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return [salt, iv, cipher.getAuthTag(), body].map((part) => part.toString('base64url')).join('.'); }
+function decryptSecretValue(encoded: string, key: string): string { const parts = encoded.split('.').map((part) => Buffer.from(part, 'base64url')); if (parts.length !== 4) throw new Error('invalid encrypted secret'); const [salt, iv, tag, body] = parts as [Buffer, Buffer, Buffer, Buffer]; const decipher = createDecipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); decipher.setAuthTag(tag); return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8'); }
 function runFromRow(row: { id: string; organization_id: string; project_id: string; test_id: string; status: ServerRunStatus; created_at: Date; started_at: Date | null; ended_at: Date | null }): RunRecord { return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, testId: row.test_id, status: row.status, createdAt: dateValue(row.created_at), ...(row.started_at === null ? {} : { startedAt: dateValue(row.started_at) }), ...(row.ended_at === null ? {} : { endedAt: dateValue(row.ended_at) }) }; }
 function artifactFromRow(row: { id: string; organization_id: string; run_id: string; storage_key: string; media_type: string; byte_size: string | number; sha256: string; created_at: Date }, key: string): ArtifactMetadata { return { id: row.id, organizationId: row.organization_id, runId: row.run_id, key, contentType: row.media_type, size: Number(row.byte_size), storageKey: row.storage_key, sha256: row.sha256, createdAt: dateValue(row.created_at) }; }
 

@@ -33,6 +33,8 @@ export class Scheduler {
   }
 
   public leaseNext(runner: RunnerCapabilities, now = Date.now()): Job | undefined {
+    const activeLeases = [...this.leases.values()].filter((lease) => lease.runnerId === runner.runnerId).length;
+    if (activeLeases >= Math.max(1, runner.maxConcurrency)) return undefined;
     const compatible = [...this.queued.values()]
       .filter((job) => this.isCompatible(job, runner))
       .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.createdAt.localeCompare(right.createdAt));
@@ -49,6 +51,18 @@ export class Scheduler {
     if (lease === undefined) return undefined;
     this.leases.delete(jobId);
     return { ...lease.job, status };
+  }
+
+  public cancel(jobId: string): Job | undefined {
+    const queued = this.queued.get(jobId);
+    if (queued !== undefined) {
+      this.queued.delete(jobId);
+      return { ...queued, status: 'cancelled' };
+    }
+    const lease = this.leases.get(jobId);
+    if (lease === undefined) return undefined;
+    this.leases.delete(jobId);
+    return { ...lease.job, status: 'cancelled' };
   }
 
   public getLeasedJob(jobId: string): Job | undefined {

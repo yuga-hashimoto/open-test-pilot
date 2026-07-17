@@ -10,6 +10,44 @@ function validManifest(id: string, name: string): Record<string, unknown> {
 }
 
 describe('OpenTestPilot server API', () => {
+  it('exposes tenant administration resources for projects, members, storage, audit, and AI workers', async () => {
+    const repository = new InMemoryTenantRepository();
+    const app = buildServer(repository);
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Admin surface' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Checkout' } });
+    expect(project.statusCode).toBe(201);
+
+    const projects = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId } });
+    expect(projects.statusCode).toBe(200);
+    expect(projects.json<{ projects: Array<{ name: string }> }>().projects).toEqual([expect.objectContaining({ name: 'Checkout' })]);
+
+    const members = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/members`, headers: { 'x-organization-id': organizationId } });
+    expect(members.statusCode).toBe(200);
+    expect(members.json<{ members: unknown[] }>().members).toEqual([]);
+
+    const policy = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/storage-policy`, headers: { 'x-organization-id': organizationId } });
+    expect(policy.statusCode).toBe(200);
+    expect(policy.json<{ successRetentionDays: number }>().successRetentionDays).toBe(30);
+    const updatedPolicy = await app.inject({ method: 'PUT', url: `/v1/organizations/${organizationId}/storage-policy`, headers: { 'x-organization-id': organizationId }, payload: { successRetentionDays: 7, capacityBytes: 1_000_000 } });
+    expect(updatedPolicy.statusCode).toBe(200);
+    expect(updatedPolicy.json<{ successRetentionDays: number; capacityBytes: number }>().successRetentionDays).toBe(7);
+
+    const worker = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/ai-workers`, headers: { 'x-organization-id': organizationId }, payload: { name: 'codex-worker', policy: { maxRetries: 3, allowPublish: false } } });
+    expect(worker.statusCode).toBe(201);
+    const workerId = worker.json<{ id: string }>().id;
+    const heartbeat = await app.inject({ method: 'POST', url: `/v1/ai-workers/${workerId}/heartbeat`, headers: { 'x-organization-id': organizationId } });
+    expect(heartbeat.statusCode).toBe(200);
+    const workers = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/ai-workers`, headers: { 'x-organization-id': organizationId } });
+    expect(workers.statusCode).toBe(200);
+    expect(workers.json<{ workers: Array<{ name: string; lastHeartbeatAt?: string }> }>().workers[0]).toMatchObject({ name: 'codex-worker', lastHeartbeatAt: expect.any(String) });
+
+    const audit = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/audit-logs`, headers: { 'x-organization-id': organizationId } });
+    expect(audit.statusCode).toBe(200);
+    expect(audit.json<{ events: Array<{ action: string }> }>().events.map((event) => event.action)).toEqual(expect.arrayContaining(['project.created', 'storage_policy.updated', 'ai_worker.created', 'ai_worker.heartbeat']));
+    await app.close();
+  });
+
   it('enforces a GitHub OAuth session and organization membership when auth is required', async () => {
     process.env['AUTH_REQUIRED'] = 'true';
     try {
@@ -30,6 +68,44 @@ describe('OpenTestPilot server API', () => {
     } finally {
       delete process.env['AUTH_REQUIRED'];
     }
+  });
+
+  it('stores secret metadata without exposing values and supports rotation', async () => {
+    const repository = new InMemoryTenantRepository();
+    const app = buildServer(repository);
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Secrets' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const created = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/secrets`, headers: { 'x-organization-id': organizationId }, payload: { name: 'checkout-token', provider: 'builtin', value: 'do-not-return-this' } });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).not.toHaveProperty('value');
+    expect(created.json<{ name: string; provider: string; maskedValue: string }>().maskedValue).not.toBe('do-not-return-this');
+    const secretId = created.json<{ id: string }>().id;
+    const listed = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/secrets`, headers: { 'x-organization-id': organizationId } });
+    expect(listed.statusCode).toBe(200);
+    expect(JSON.stringify(listed.json())).not.toContain('do-not-return-this');
+    const rotated = await app.inject({ method: 'POST', url: `/v1/secrets/${secretId}/rotate`, headers: { 'x-organization-id': organizationId }, payload: { value: 'rotated-value' } });
+    expect(rotated.statusCode).toBe(200);
+    expect(rotated.json()).not.toHaveProperty('value');
+    const audit = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/audit-logs`, headers: { 'x-organization-id': organizationId } });
+    expect(audit.json<{ events: Array<{ action: string }> }>().events.map((event) => event.action)).toEqual(expect.arrayContaining(['secret.created', 'secret.rotated']));
+    await app.close();
+  });
+
+  it('cancels a queued run through the tenant-safe job API', async () => {
+    const app = buildServer(new InMemoryTenantRepository());
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Cancellation' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Cancel project' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Cancel test', manifestId: 'cancel-test', manifest: validManifest('cancel-test', 'Cancel test') } });
+    const run = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId: test.json<{ id: string }>().id } });
+    const jobId = `job-${run.json<{ runId: string }>().runId}`;
+    const cancelled = await app.inject({ method: 'POST', url: `/v1/jobs/${jobId}/cancel`, headers: { 'x-organization-id': organizationId } });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<{ status: string }>().status).toBe('cancelled');
+    const storedRun = await app.inject({ method: 'GET', url: `/v1/runs/${run.json<{ runId: string }>().runId}`, headers: { 'x-organization-id': organizationId } });
+    expect(storedRun.json<{ status: string }>().status).toBe('cancelled');
+    await app.close();
   });
 
   it('creates an organization and denies a cross-organization read', async () => {

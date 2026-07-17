@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
@@ -36,7 +36,7 @@ export interface TestRecord {
   createdAt: string;
 }
 
-export type ServerRunStatus = 'queued' | 'running' | 'passed' | 'failed';
+export type ServerRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'cancelled';
 
 export interface RunRecord {
   id: string;
@@ -81,10 +81,62 @@ export interface RepositoryRecord {
   createdAt: string;
 }
 
+export interface OrganizationMemberRecord {
+  organizationId: string;
+  userId: string;
+  githubUserId: string;
+  login: string;
+  role: string;
+  createdAt: string;
+}
+
+export interface AuditEventRecord {
+  id: string;
+  organizationId: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface StoragePolicyRecord {
+  organizationId: string;
+  successRetentionDays: number;
+  failureRetentionDays: number;
+  fixedRetention: boolean;
+  generatedCodeRetentionDays: number;
+  capacityBytes?: number;
+  updatedAt: string;
+}
+
+export interface AiWorkerRecord {
+  id: string;
+  organizationId: string;
+  name: string;
+  policy: Record<string, unknown>;
+  lastHeartbeatAt?: string;
+  createdAt: string;
+}
+
+export interface SecretRecord {
+  id: string;
+  organizationId: string;
+  projectId?: string;
+  environmentId?: string;
+  name: string;
+  provider: string;
+  externalReference?: string;
+  maskedValue: string;
+  rotatedAt?: string;
+  createdAt: string;
+}
+
 export interface TenantRepository {
   createOrganization(name: string): MaybePromise<Organization>;
   getOrganization(id: string): MaybePromise<Organization | undefined>;
   createProject(organizationId: string, name: string): MaybePromise<Project>;
+  listProjects(organizationId: string): MaybePromise<Project[]>;
   getProject(organizationId: string, id: string): MaybePromise<Project | undefined>;
   createTest(organizationId: string, projectId: string, name: string, manifestId: string): MaybePromise<TestRecord>;
   listTests(organizationId: string): MaybePromise<TestRecord[]>;
@@ -102,6 +154,7 @@ export interface TenantRepository {
   listArtifactsBefore(organizationId: string, before: string): MaybePromise<ArtifactMetadata[]>;
   deleteArtifact(organizationId: string, artifactId: string): MaybePromise<boolean>;
   recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): MaybePromise<void>;
+  listAuditEvents(organizationId: string): MaybePromise<AuditEventRecord[]>;
   getArtifact(organizationId: string, artifactId: string): MaybePromise<ArtifactMetadata | undefined>;
   createRepository(organizationId: string, input: { owner: string; name: string; provider?: string; installationId?: number }): MaybePromise<RepositoryRecord>;
   getRepository(organizationId: string, id: string): MaybePromise<RepositoryRecord | undefined>;
@@ -120,6 +173,16 @@ export interface TenantRepository {
   getAuthSession(token: string): MaybePromise<{ userId: string; expiresAt: string } | undefined>;
   addOrganizationMembership(organizationId: string, userId: string, role: string): MaybePromise<void>;
   isOrganizationMember(organizationId: string, userId: string): MaybePromise<boolean>;
+  listOrganizationMembers(organizationId: string): MaybePromise<OrganizationMemberRecord[]>;
+  getStoragePolicy(organizationId: string): MaybePromise<StoragePolicyRecord>;
+  updateStoragePolicy(organizationId: string, patch: Partial<Omit<StoragePolicyRecord, 'organizationId' | 'updatedAt'>>): MaybePromise<StoragePolicyRecord>;
+  createAiWorker(organizationId: string, name: string, policy: Record<string, unknown>): MaybePromise<AiWorkerRecord>;
+  listAiWorkers(organizationId: string): MaybePromise<AiWorkerRecord[]>;
+  heartbeatAiWorker(organizationId: string, id: string): MaybePromise<AiWorkerRecord | undefined>;
+  createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): MaybePromise<SecretRecord>;
+  listSecrets(organizationId: string): MaybePromise<SecretRecord[]>;
+  rotateSecret(organizationId: string, id: string, value: string): MaybePromise<SecretRecord | undefined>;
+  getSecretValue(organizationId: string, id: string): MaybePromise<string | undefined>;
 }
 
 export class InMemoryTenantRepository implements TenantRepository {
@@ -130,7 +193,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly manifests = new Map<string, unknown>();
   private readonly runResults = new Map<string, StoredRunResult>();
   private readonly artifacts = new Map<string, ArtifactMetadata>();
-  private readonly auditEvents: Array<{ organizationId: string; action: string; resourceType: string; resourceId?: string; metadata: Record<string, unknown> }> = [];
+  private readonly auditEvents: AuditEventRecord[] = [];
   private readonly repositories = new Map<string, RepositoryRecord>();
   private readonly schedules = new Map<string, ScheduleRecord>();
   private readonly changeRequests = new Map<string, ChangeRequestRecord>();
@@ -138,7 +201,11 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly pullRequests = new Map<string, PullRequestRecord>();
   private readonly users = new Map<string, { id: string; githubUserId: string; login: string }>();
   private readonly sessions = new Map<string, { userId: string; expiresAt: string }>();
-  private readonly memberships = new Set<string>();
+  private readonly memberships = new Map<string, OrganizationMemberRecord>();
+  private readonly storagePolicies = new Map<string, StoragePolicyRecord>();
+  private readonly aiWorkers = new Map<string, AiWorkerRecord>();
+  private readonly secrets = new Map<string, SecretRecord>();
+  private readonly secretValues = new Map<string, string>();
 
   createOrganization(name: string): Organization {
     const organization = { id: `org-${randomUUID()}`, name, createdAt: new Date().toISOString() };
@@ -171,12 +238,16 @@ export class InMemoryTenantRepository implements TenantRepository {
   }
 
   addOrganizationMembership(organizationId: string, userId: string, role: string): void {
-    this.memberships.add(`${organizationId}:${userId}:${role}`);
+    const user = this.users.get(userId);
+    if (user === undefined) return;
+    this.memberships.set(`${organizationId}:${userId}`, { organizationId, userId: user.id, githubUserId: user.githubUserId, login: user.login, role, createdAt: new Date().toISOString() });
   }
 
   isOrganizationMember(organizationId: string, userId: string): boolean {
-    return [...this.memberships].some((membership) => membership.startsWith(`${organizationId}:${userId}:`));
+    return this.memberships.has(`${organizationId}:${userId}`);
   }
+
+  listOrganizationMembers(organizationId: string): OrganizationMemberRecord[] { return [...this.memberships.values()].filter((member) => member.organizationId === organizationId); }
 
   getOrganization(id: string): Organization | undefined { return this.organizations.get(id); }
 
@@ -185,6 +256,8 @@ export class InMemoryTenantRepository implements TenantRepository {
     this.projects.set(project.id, project);
     return project;
   }
+
+  listProjects(organizationId: string): Project[] { return [...this.projects.values()].filter((project) => project.organizationId === organizationId); }
 
   getProject(organizationId: string, id: string): Project | undefined {
     const project = this.projects.get(id);
@@ -250,7 +323,62 @@ export class InMemoryTenantRepository implements TenantRepository {
 
   deleteArtifact(organizationId: string, artifactId: string): boolean { const artifact = this.getArtifact(organizationId, artifactId); return artifact === undefined ? false : this.artifacts.delete(artifact.id); }
 
-  recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): void { this.auditEvents.push({ organizationId, action, resourceType, ...(resourceId === undefined ? {} : { resourceId }), metadata }); }
+  recordAuditEvent(organizationId: string, action: string, resourceType: string, resourceId: string | undefined, metadata: Record<string, unknown>): void { this.auditEvents.push({ id: `audit-${randomUUID()}`, organizationId, action, resourceType, ...(resourceId === undefined ? {} : { resourceId }), metadata, createdAt: new Date().toISOString() }); }
+
+  listAuditEvents(organizationId: string): AuditEventRecord[] { return this.auditEvents.filter((event) => event.organizationId === organizationId); }
+
+  getStoragePolicy(organizationId: string): StoragePolicyRecord {
+    const existing = this.storagePolicies.get(organizationId);
+    if (existing !== undefined) return existing;
+    const policy: StoragePolicyRecord = { organizationId, successRetentionDays: 30, failureRetentionDays: 180, fixedRetention: false, generatedCodeRetentionDays: 30, updatedAt: new Date().toISOString() };
+    this.storagePolicies.set(organizationId, policy);
+    return policy;
+  }
+
+  updateStoragePolicy(organizationId: string, patch: Partial<Omit<StoragePolicyRecord, 'organizationId' | 'updatedAt'>>): StoragePolicyRecord {
+    const updated: StoragePolicyRecord = { ...this.getStoragePolicy(organizationId), ...patch, organizationId, updatedAt: new Date().toISOString() };
+    this.storagePolicies.set(organizationId, updated);
+    return updated;
+  }
+
+  createAiWorker(organizationId: string, name: string, policy: Record<string, unknown>): AiWorkerRecord {
+    const worker: AiWorkerRecord = { id: `ai-worker-${randomUUID()}`, organizationId, name, policy, createdAt: new Date().toISOString() };
+    this.aiWorkers.set(worker.id, worker);
+    return worker;
+  }
+
+  listAiWorkers(organizationId: string): AiWorkerRecord[] { return [...this.aiWorkers.values()].filter((worker) => worker.organizationId === organizationId); }
+
+  heartbeatAiWorker(organizationId: string, id: string): AiWorkerRecord | undefined {
+    const worker = this.aiWorkers.get(id);
+    if (worker === undefined || worker.organizationId !== organizationId) return undefined;
+    const updated = { ...worker, lastHeartbeatAt: new Date().toISOString() };
+    this.aiWorkers.set(id, updated);
+    return updated;
+  }
+
+  async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
+    const secret: SecretRecord = { id: `secret-${randomUUID()}`, organizationId, name: input.name, provider: input.provider, maskedValue: input.value === undefined ? '[EXTERNAL]' : maskSecretForApi(input.value), createdAt: new Date().toISOString(), ...(input.projectId === undefined ? {} : { projectId: input.projectId }), ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }), ...(input.externalReference === undefined ? {} : { externalReference: input.externalReference }) };
+    this.secrets.set(secret.id, secret);
+    if (input.value !== undefined) this.secretValues.set(secret.id, encryptSecretValue(input.value, secretEncryptionKey()));
+    return secret;
+  }
+
+  listSecrets(organizationId: string): SecretRecord[] { return [...this.secrets.values()].filter((secret) => secret.organizationId === organizationId); }
+
+  async rotateSecret(organizationId: string, id: string, value: string): Promise<SecretRecord | undefined> {
+    const secret = this.secrets.get(id);
+    if (secret === undefined || secret.organizationId !== organizationId) return undefined;
+    this.secretValues.set(id, encryptSecretValue(value, secretEncryptionKey()));
+    const updated = { ...secret, maskedValue: maskSecretForApi(value), rotatedAt: new Date().toISOString() };
+    this.secrets.set(id, updated);
+    return updated;
+  }
+
+  async getSecretValue(organizationId: string, id: string): Promise<string | undefined> {
+    const secret = this.secrets.get(id);
+    return secret?.organizationId === organizationId && this.secretValues.has(id) ? decryptSecretValue(this.secretValues.get(id)!, secretEncryptionKey()) : undefined;
+  }
 
   getArtifact(organizationId: string, artifactId: string): ArtifactMetadata | undefined {
     const artifact = this.artifacts.get(artifactId);
@@ -333,6 +461,10 @@ interface StepParams { runId: string; stepId: string }
 interface ResourceParams { id: string }
 interface CreateOrganizationBody { name: string }
 interface CreateProjectBody { name: string }
+interface UpdateStoragePolicyBody { successRetentionDays?: number; failureRetentionDays?: number; fixedRetention?: boolean; generatedCodeRetentionDays?: number; capacityBytes?: number | null }
+interface CreateAiWorkerBody { name: string; policy?: Record<string, unknown> }
+interface CreateSecretBody { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }
+interface RotateSecretBody { value: string }
 interface CreateTestBody { projectId: string; name: string; manifestId: string; manifest?: unknown }
 interface CreateRunBody { projectId: string; testId: string; priority?: number; requiredLabels?: string[] }
 interface TenantHeaders { 'x-organization-id'?: string }
@@ -459,7 +591,86 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     if (typeof request.body?.name !== 'string' || request.body.name.trim().length === 0) return reply.code(400).send({ error: 'name is required' });
     if (await repository.getOrganization(request.params.organizationId) === undefined) return reply.code(404).send({ error: 'organization not found' });
-    return reply.code(201).send(await repository.createProject(request.params.organizationId, request.body.name.trim()));
+    const project = await repository.createProject(request.params.organizationId, request.body.name.trim());
+    await repository.recordAuditEvent(request.params.organizationId, 'project.created', 'project', project.id, { name: project.name });
+    return reply.code(201).send(project);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/projects', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ projects: await repository.listProjects(request.params.organizationId) });
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/members', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ members: await repository.listOrganizationMembers(request.params.organizationId) });
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/audit-logs', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ events: await repository.listAuditEvents(request.params.organizationId) });
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/storage-policy', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send(await repository.getStoragePolicy(request.params.organizationId));
+  });
+
+  app.put<{ Params: OrganizationParams; Headers: TenantHeaders; Body: UpdateStoragePolicyBody }>('/v1/organizations/:organizationId/storage-policy', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body ?? {};
+    const numericValues = [body.successRetentionDays, body.failureRetentionDays, body.generatedCodeRetentionDays, body.capacityBytes].filter((value): value is number => value !== undefined && value !== null);
+    if (numericValues.some((value) => !Number.isInteger(value) || value < 0)) return reply.code(400).send({ error: 'retention and capacity values must be non-negative integers' });
+    const policy = await repository.updateStoragePolicy(request.params.organizationId, { ...(body.successRetentionDays === undefined ? {} : { successRetentionDays: body.successRetentionDays }), ...(body.failureRetentionDays === undefined ? {} : { failureRetentionDays: body.failureRetentionDays }), ...(body.fixedRetention === undefined ? {} : { fixedRetention: body.fixedRetention }), ...(body.generatedCodeRetentionDays === undefined ? {} : { generatedCodeRetentionDays: body.generatedCodeRetentionDays }), ...(body.capacityBytes === undefined || body.capacityBytes === null ? {} : { capacityBytes: body.capacityBytes }) });
+    await repository.recordAuditEvent(request.params.organizationId, 'storage_policy.updated', 'storage_policy', request.params.organizationId, { changes: body });
+    return reply.send(policy);
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateAiWorkerBody }>('/v1/organizations/:organizationId/ai-workers', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    if (typeof request.body?.name !== 'string' || request.body.name.trim() === '') return reply.code(400).send({ error: 'name is required' });
+    const worker = await repository.createAiWorker(request.params.organizationId, request.body.name.trim(), request.body.policy ?? {});
+    await repository.recordAuditEvent(request.params.organizationId, 'ai_worker.created', 'ai_worker', worker.id, { name: worker.name });
+    return reply.code(201).send(worker);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/ai-workers', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ workers: await repository.listAiWorkers(request.params.organizationId) });
+  });
+
+  app.post<{ Params: { workerId: string }; Headers: TenantHeaders }>('/v1/ai-workers/:workerId/heartbeat', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const worker = await repository.heartbeatAiWorker(organizationId, request.params.workerId);
+    if (worker === undefined) return reply.code(404).send({ error: 'AI worker not found' });
+    await repository.recordAuditEvent(organizationId, 'ai_worker.heartbeat', 'ai_worker', worker.id, {});
+    return reply.send(worker);
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateSecretBody }>('/v1/organizations/:organizationId/secrets', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.name !== 'string' || body.name.trim() === '' || typeof body.provider !== 'string' || body.provider.trim() === '') return reply.code(400).send({ error: 'name and provider are required' });
+    if (body.provider === 'builtin' && (typeof body.value !== 'string' || body.value.length === 0)) return reply.code(400).send({ error: 'builtin secrets require a value' });
+    const secret = await repository.createSecret(request.params.organizationId, { ...body, name: body.name.trim(), provider: body.provider.trim() });
+    await repository.recordAuditEvent(request.params.organizationId, 'secret.created', 'secret', secret.id, { name: secret.name, provider: secret.provider });
+    return reply.code(201).send(secret);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/secrets', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ secrets: await repository.listSecrets(request.params.organizationId) });
+  });
+
+  app.post<{ Params: { secretId: string }; Headers: TenantHeaders; Body: RotateSecretBody }>('/v1/secrets/:secretId/rotate', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    if (typeof request.body?.value !== 'string' || request.body.value.length === 0) return reply.code(400).send({ error: 'value is required' });
+    const secret = await repository.rotateSecret(organizationId, request.params.secretId, request.body.value);
+    if (secret === undefined) return reply.code(404).send({ error: 'secret not found' });
+    await repository.recordAuditEvent(organizationId, 'secret.rotated', 'secret', secret.id, { name: secret.name });
+    return reply.send(secret);
   });
 
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateTestBody }>('/v1/organizations/:organizationId/tests', async (request, reply) => {
@@ -852,6 +1063,18 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ job: job ?? null });
   });
 
+  app.post<{ Params: JobParams; Headers: TenantHeaders }>('/v1/jobs/:jobId/cancel', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const job = await executionQueue.getJob(request.params.jobId);
+    if (job === undefined) return reply.code(404).send({ error: 'job not found' });
+    if (job.organizationId !== organizationId) return reply.code(403).send({ error: 'organization access denied' });
+    const cancelled = await executionQueue.cancel(organizationId, request.params.jobId);
+    if (cancelled === undefined) return reply.code(409).send({ error: 'job is no longer cancellable' });
+    await repository.updateRun(cancelled.runId, { status: 'cancelled', endedAt: new Date().toISOString() }, organizationId);
+    return reply.send({ jobId: cancelled.jobId, runId: cancelled.runId, status: cancelled.status });
+  });
+
   app.post<{ Params: JobParams; Headers: TenantHeaders; Body: CompleteJobBody }>('/v1/jobs/:jobId/complete', async (request, reply) => {
     const leasedJob = await executionQueue.getJob(request.params.jobId);
     if (leasedJob === undefined) return reply.code(404).send({ error: 'leased job not found' });
@@ -864,7 +1087,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const completedRunId = result.runId ?? leasedJob.runId;
     if (completedRunId === undefined) return reply.code(500).send({ error: 'completed job did not include run id' });
     if (request.body?.result !== undefined) await repository.saveRunResult(leasedOrganizationId, completedRunId, { ...request.body.result, failures: request.body.result.failures ?? [], steps: request.body.result.steps ?? [] });
-    await repository.updateRun(completedRunId, { status: result.status === 'passed' ? 'passed' : 'failed', endedAt: new Date().toISOString() }, leasedOrganizationId);
+    await repository.updateRun(completedRunId, { status: result.status === 'passed' ? 'passed' : result.status === 'cancelled' ? 'cancelled' : 'failed', endedAt: new Date().toISOString() }, leasedOrganizationId);
     return reply.send({ jobId: result.jobId, status: result.status });
   });
 
@@ -911,7 +1134,14 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: Object.fromEntries(Object.entries({
     '/v1/organizations': { post: {} },
     '/v1/organizations/{organizationId}': { get: {} },
-    '/v1/organizations/{organizationId}/projects': { post: {} },
+    '/v1/organizations/{organizationId}/projects': { get: {}, post: {} },
+    '/v1/organizations/{organizationId}/members': { get: {} },
+    '/v1/organizations/{organizationId}/audit-logs': { get: {} },
+    '/v1/organizations/{organizationId}/storage-policy': { get: {}, put: {} },
+    '/v1/organizations/{organizationId}/ai-workers': { get: {}, post: {} },
+    '/v1/ai-workers/{workerId}/heartbeat': { post: {} },
+    '/v1/organizations/{organizationId}/secrets': { get: {}, post: {} },
+    '/v1/secrets/{secretId}/rotate': { post: {} },
     '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
     '/v1/repositories/{repositoryId}': { get: {} },
     '/v1/repositories/{repositoryId}/sync': { post: {} },
@@ -941,6 +1171,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/jobs': { post: {} },
     '/v1/runners/{runnerId}/lease': { post: {} },
     '/v1/jobs/{jobId}/complete': { post: {} },
+    '/v1/jobs/{jobId}/cancel': { post: {} },
     '/v1/organizations/{organizationId}/schedules': { get: {}, post: {} },
     '/v1/schedules/{scheduleId}/trigger': { post: {} },
     '/v1/webhooks/github': { post: {} },
@@ -948,6 +1179,11 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
 
   return app;
 }
+
+function secretEncryptionKey(): string { return process.env['OPENTESTPILOT_SECRET_KEY'] ?? 'open-test-pilot-development-key'; }
+function encryptSecretValue(value: string, key: string): string { const salt = randomBytes(16); const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return [salt, iv, cipher.getAuthTag(), body].map((part) => part.toString('base64url')).join('.'); }
+function decryptSecretValue(encoded: string, key: string): string { const parts = encoded.split('.').map((part) => Buffer.from(part, 'base64url')); if (parts.length !== 4) throw new Error('invalid encrypted secret'); const [salt, iv, tag, body] = parts as [Buffer, Buffer, Buffer, Buffer]; const decipher = createDecipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); decipher.setAuthTag(tag); return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8'); }
+function maskSecretForApi(value: string): string { if (value.length <= 4) return '[REDACTED]'; return `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`; }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   const app = buildServer(createConfiguredRepository());

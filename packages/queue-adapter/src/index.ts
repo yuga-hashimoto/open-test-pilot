@@ -12,6 +12,7 @@ export interface ExecutionQueue {
   lease(organizationId: string, runnerId: string): Promise<Job | undefined>;
   getJob(jobId: string): Promise<Job | undefined>;
   complete(organizationId: string, jobId: string, status: Extract<Job['status'], 'passed' | 'failed' | 'cancelled'>): Promise<Job | undefined>;
+  cancel(organizationId: string, jobId: string): Promise<Job | undefined>;
   close?(): Promise<void>;
 }
 
@@ -40,6 +41,14 @@ export class MemoryExecutionQueue implements ExecutionQueue {
     const completed = scheduler.complete(jobId, status);
     if (completed !== undefined) this.jobs.set(jobId, completed);
     return completed;
+  }
+  async cancel(organizationId: string, jobId: string): Promise<Job | undefined> {
+    const scheduler = this.schedulers.get(organizationId);
+    const job = this.jobs.get(jobId);
+    if (scheduler === undefined || job?.organizationId !== organizationId) return undefined;
+    const cancelled = scheduler.cancel(jobId);
+    if (cancelled !== undefined) this.jobs.set(jobId, cancelled);
+    return cancelled;
   }
 }
 
@@ -101,6 +110,7 @@ export class RedisExecutionQueue implements ExecutionQueue {
   }
   async getJob(jobId: string): Promise<Job | undefined> { const client = await this.ready(); const raw = await client.get(this.key('job', jobId)); return raw === null ? undefined : JSON.parse(raw) as Job; }
   async complete(organizationId: string, jobId: string, status: Extract<Job['status'], 'passed' | 'failed' | 'cancelled'>): Promise<Job | undefined> { const client = await this.ready(); const raw = await client.get(this.key('job', jobId)); if (raw === null) return undefined; const job = JSON.parse(raw) as Job & { leaseRunnerId?: string; leaseExpiresAt?: number }; if (job.organizationId !== organizationId || job.status !== 'leased') return undefined; const completed = { ...job, status }; delete completed.leaseRunnerId; delete completed.leaseExpiresAt; await client.zRem(this.key('leases', organizationId), jobId); await client.set(this.key('job', jobId), JSON.stringify(completed)); return completed; }
+  async cancel(organizationId: string, jobId: string): Promise<Job | undefined> { const client = await this.ready(); const raw = await client.get(this.key('job', jobId)); if (raw === null) return undefined; const job = JSON.parse(raw) as Job & { leaseRunnerId?: string; leaseExpiresAt?: number }; if (job.organizationId !== organizationId || (job.status !== 'queued' && job.status !== 'leased')) return undefined; await client.zRem(this.key('queue', organizationId), jobId); await client.zRem(this.key('leases', organizationId), jobId); delete job.leaseRunnerId; delete job.leaseExpiresAt; const cancelled = { ...job, status: 'cancelled' as const }; await client.set(this.key('job', jobId), JSON.stringify(cancelled)); return cancelled; }
   async close(): Promise<void> { if (this.connected) await this.client.quit(); this.connected = false; }
 }
 

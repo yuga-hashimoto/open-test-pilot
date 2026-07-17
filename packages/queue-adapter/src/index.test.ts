@@ -37,4 +37,12 @@ describe('execution queue', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(await queue.lease('org-1', second.runnerId)).toMatchObject({ jobId: 'job-1', status: 'leased' });
   });
+
+  it('cancels a queued or leased job without allowing a later lease', async () => {
+    const queue = new MemoryExecutionQueue();
+    const runner = await queue.registerRunner('org-1', 'runner', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+    expect(await queue.enqueue('org-1', job('org-1'))).toBe(true);
+    expect(await queue.cancel('org-1', 'job-1')).toMatchObject({ status: 'cancelled' });
+    expect(await queue.lease('org-1', runner.runnerId)).toBeUndefined();
+  });
 });

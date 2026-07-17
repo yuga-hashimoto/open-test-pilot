@@ -43,4 +43,15 @@ describe('Scheduler', () => {
     expect(scheduler.expireLeases(Date.now() + 10)).toEqual(['once']);
     expect(scheduler.size).toBe(1);
   });
+
+  it('honors runner max concurrency and frees a slot on completion', () => {
+    const scheduler = new Scheduler();
+    scheduler.enqueue(job('first', 1, 'chromium'));
+    scheduler.enqueue(job('second', 1, 'chromium'));
+    const constrained = { ...runner('r1', ['chromium']), maxConcurrency: 1 };
+    expect(scheduler.leaseNext(constrained)?.jobId).toBe('first');
+    expect(scheduler.leaseNext(constrained)).toBeUndefined();
+    expect(scheduler.complete('first', 'passed')?.status).toBe('passed');
+    expect(scheduler.leaseNext(constrained)?.jobId).toBe('second');
+  });
 });

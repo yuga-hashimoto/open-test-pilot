@@ -2,7 +2,7 @@
 
 export interface ApiTest { id: string; projectId: string; name: string; manifestId: string; createdAt: string; }
 export interface ApiTestManifest { testId?: string; manifestId?: string; schemaVersion?: string; [key: string]: unknown; }
-export interface ApiRun { id: string; projectId: string; testId: string; status: 'queued' | 'running' | 'passed' | 'failed'; createdAt: string; startedAt?: string; endedAt?: string; }
+export interface ApiRun { id: string; projectId: string; testId: string; status: 'queued' | 'running' | 'passed' | 'failed' | 'cancelled'; createdAt: string; startedAt?: string; endedAt?: string; }
 export interface ApiSchedule { id: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string; }
 export interface ApiFailure { message: string; category?: string; artifacts?: string[]; [key: string]: unknown; }
 export interface ApiArtifact { id: string; runId: string; key: string; contentType: string; size: number; storageKey: string; sha256: string; createdAt: string; }
@@ -11,13 +11,29 @@ export interface ApiChangeRequest { id: string; title: string; description: stri
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
 export interface ApiPullRequest { number: number; htmlUrl: string; head: string; base: string; }
+export interface ApiProject { id: string; organizationId: string; name: string; createdAt: string; }
+export interface ApiMember { organizationId: string; userId: string; githubUserId: string; login: string; role: string; createdAt: string; }
+export interface ApiAuditEvent { id: string; organizationId: string; action: string; resourceType: string; resourceId?: string; metadata: Record<string, unknown>; createdAt: string; }
+export interface ApiStoragePolicy { organizationId: string; successRetentionDays: number; failureRetentionDays: number; fixedRetention: boolean; generatedCodeRetentionDays: number; capacityBytes?: number; updatedAt: string; }
+export interface ApiAiWorker { id: string; organizationId: string; name: string; policy: Record<string, unknown>; lastHeartbeatAt?: string; createdAt: string; }
+export interface ApiSecret { id: string; organizationId: string; projectId?: string; environmentId?: string; name: string; provider: string; externalReference?: string; maskedValue: string; rotatedAt?: string; createdAt: string; }
 
 export interface TestPilotApi {
   listTests(): Promise<ApiTest[]>;
+  listProjects(): Promise<ApiProject[]>;
+  listMembers(): Promise<ApiMember[]>;
+  listAuditLogs(): Promise<ApiAuditEvent[]>;
+  getStoragePolicy(): Promise<ApiStoragePolicy>;
+  updateStoragePolicy(patch: Partial<Pick<ApiStoragePolicy, 'successRetentionDays' | 'failureRetentionDays' | 'fixedRetention' | 'generatedCodeRetentionDays' | 'capacityBytes'>>): Promise<ApiStoragePolicy>;
+  listAiWorkers(): Promise<ApiAiWorker[]>;
+  listSecrets(): Promise<ApiSecret[]>;
+  createSecret(input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<ApiSecret>;
+  rotateSecret(secretId: string, value: string): Promise<ApiSecret>;
   listRuns(): Promise<ApiRun[]>;
   listSchedules(): Promise<ApiSchedule[]>;
   listRunners(): Promise<ApiRunner[]>;
   startRun(projectId: string, testId: string): Promise<{ runId: string; status: ApiRun['status'] }>;
+  cancelRun(runId: string): Promise<{ runId: string; status: 'cancelled' }>;
   triggerSchedule(scheduleId: string): Promise<{ scheduleId: string; runId: string; status: ApiRun['status']; trigger: 'schedule' }>;
   getRun(runId: string): Promise<ApiRun>;
   getTest(testId: string): Promise<ApiTest>;
@@ -55,10 +71,20 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
   }
   return {
     async listTests() { return (await request<{ tests: ApiTest[] }>(`/v1/organizations/${pathId(config.organizationId)}/tests`)).tests; },
+    async listProjects() { return (await request<{ projects: ApiProject[] }>(`/v1/organizations/${pathId(config.organizationId)}/projects`)).projects; },
+    async listMembers() { return (await request<{ members: ApiMember[] }>(`/v1/organizations/${pathId(config.organizationId)}/members`)).members; },
+    async listAuditLogs() { return (await request<{ events: ApiAuditEvent[] }>(`/v1/organizations/${pathId(config.organizationId)}/audit-logs`)).events; },
+    async getStoragePolicy() { return await request<ApiStoragePolicy>(`/v1/organizations/${pathId(config.organizationId)}/storage-policy`); },
+    async updateStoragePolicy(patch) { return await request<ApiStoragePolicy>(`/v1/organizations/${pathId(config.organizationId)}/storage-policy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },
+    async listAiWorkers() { return (await request<{ workers: ApiAiWorker[] }>(`/v1/organizations/${pathId(config.organizationId)}/ai-workers`)).workers; },
+    async listSecrets() { return (await request<{ secrets: ApiSecret[] }>(`/v1/organizations/${pathId(config.organizationId)}/secrets`)).secrets; },
+    async createSecret(input) { return await request<ApiSecret>(`/v1/organizations/${pathId(config.organizationId)}/secrets`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
+    async rotateSecret(secretId, value) { return await request<ApiSecret>(`/v1/secrets/${pathId(secretId)}/rotate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value }) }); },
     async listRuns() { return (await request<{ runs: ApiRun[] }>(`/v1/organizations/${pathId(config.organizationId)}/runs`)).runs; },
     async listSchedules() { return (await request<{ schedules: ApiSchedule[] }>(`/v1/organizations/${pathId(config.organizationId)}/schedules`)).schedules; },
     async listRunners() { return (await request<{ runners: ApiRunner[] }>(`/v1/organizations/${pathId(config.organizationId)}/runners`)).runners; },
     async startRun(projectId, testId) { return await request<{ runId: string; status: ApiRun['status'] }>(`/v1/organizations/${pathId(config.organizationId)}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, testId }) }); },
+    async cancelRun(runId) { return await request<{ runId: string; status: 'cancelled' }>(`/v1/jobs/job-${pathId(runId)}/cancel`, { method: 'POST' }); },
     async triggerSchedule(scheduleId) { return await request<{ scheduleId: string; runId: string; status: ApiRun['status']; trigger: 'schedule' }>(`/v1/schedules/${pathId(scheduleId)}/trigger`, { method: 'POST' }); },
     async getRun(runId) { return await request<ApiRun>(`/v1/runs/${pathId(runId)}`); },
     async getTest(testId) { return await request<ApiTest>(`/v1/tests/${pathId(testId)}`); },
