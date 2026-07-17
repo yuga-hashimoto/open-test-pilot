@@ -23,7 +23,7 @@ steps:
         value: test@example.com
       - id: submit-login
         type: web.click
-        selector: "role=button[name=Sign in]"
+        selector: "role=button[name=ログイン]"
       - id: assert-dashboard
         type: web.expectVisible
         selector: "[data-testid=dashboard]"
