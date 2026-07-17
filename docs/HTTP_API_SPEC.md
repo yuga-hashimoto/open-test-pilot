@@ -1,6 +1,6 @@
 # HTTP API Specification
 
-The HTTP API mirrors the MCP operations and publishes OpenAPI schemas. Runs are asynchronous. The local server foundation exposes `POST /v1/organizations`, organization-scoped project and test creation/listing, `POST /v1/organizations/{organizationId}/runs`, `GET /v1/runs/{runId}`, `GET /v1/runs/{runId}/report`, and `GET /openapi.json`.
+The HTTP API mirrors the MCP operations and publishes OpenAPI schemas. Runs are asynchronous. The local server foundation exposes `POST /v1/organizations`, organization-scoped project and test creation/listing, `POST /v1/organizations/{organizationId}/runs`, `GET /v1/runs/{runId}`, `GET /v1/runs/{runId}/report`, tenant-scoped custom-action plugin publication/version history, and `GET /openapi.json`.
 
 The current local adapter uses an explicit in-process persistence interface; setting `DATABASE_URL` selects the PostgreSQL repository without changing route contracts. Every organization-scoped request requires `x-organization-id` matching the path tenant. Production authentication remains GitHub OAuth and the GitHub App installation-token flow.
 

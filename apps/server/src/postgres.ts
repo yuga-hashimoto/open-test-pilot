@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
-import type { AiWorkerJobRecord, AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, ManifestVersionRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { AiWorkerJobRecord, AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, ManifestVersionRecord, Organization, OrganizationMemberRecord, PluginRecord, PluginVersionRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -325,6 +325,36 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
+  async createPlugin(organizationId: string, pluginType: string, name: string): Promise<PluginRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<PluginRow>('INSERT INTO plugins (organization_id, plugin_type, name) VALUES ($1, $2, $3) RETURNING id, organization_id, plugin_type, name, created_at', [organizationId, pluginType, name]);
+      return pluginFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listPlugins(organizationId: string): Promise<PluginRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<PluginRow>('SELECT id, organization_id, plugin_type, name, created_at FROM plugins WHERE organization_id = $1 ORDER BY created_at DESC, id DESC', [organizationId]);
+      return result.rows.map(pluginFromRow);
+    });
+  }
+
+  async publishPluginVersion(organizationId: string, pluginId: string, version: string, manifest: Record<string, unknown>): Promise<PluginVersionRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const plugin = await client.query<{ id: string }>('SELECT id FROM plugins WHERE organization_id = $1 AND id = $2', [organizationId, pluginId]);
+      if (plugin.rows[0] === undefined) return undefined;
+      const result = await client.query<PluginVersionRow>('INSERT INTO plugin_versions (organization_id, plugin_id, version, manifest) VALUES ($1, $2, $3, $4::jsonb) RETURNING id, organization_id, plugin_id, version, manifest, created_at', [organizationId, pluginId, version, JSON.stringify(manifest)]);
+      return pluginVersionFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listPluginVersions(organizationId: string, pluginId: string): Promise<PluginVersionRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<PluginVersionRow>('SELECT id, organization_id, plugin_id, version, manifest, created_at FROM plugin_versions WHERE organization_id = $1 AND plugin_id = $2 ORDER BY created_at DESC, id DESC', [organizationId, pluginId]);
+      return result.rows.map(pluginVersionFromRow);
+    });
+  }
+
   async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
     return this.tenantQuery(organizationId, async (client) => {
       const encryptedValue = input.value === undefined ? null : encryptSecretValue(input.value, secretEncryptionKey());
@@ -506,6 +536,10 @@ function storagePolicyFromRow(row: { organization_id: string; success_retention_
 function aiWorkerFromRow(row: { id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }): AiWorkerRecord { return { id: row.id, organizationId: row.organization_id, name: row.name, policy: row.policy, ...(row.last_heartbeat_at === null ? {} : { lastHeartbeatAt: dateValue(row.last_heartbeat_at) }), createdAt: dateValue(row.created_at) }; }
 interface AiWorkerJobRow { id: string; organization_id: string; worker_id: string; operation: string; request: Record<string, unknown>; result: Record<string, unknown> | null; status: AiWorkerJobRecord['status']; attempt: number; lease_expires_at: Date | null; created_at: Date; updated_at: Date; }
 function aiWorkerJobFromRow(row: AiWorkerJobRow): AiWorkerJobRecord { return { id: row.id, organizationId: row.organization_id, workerId: row.worker_id, operation: row.operation, request: row.request, ...(row.result === null ? {} : { result: row.result }), status: row.status, attempt: row.attempt, ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: dateValue(row.lease_expires_at) }), createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) }; }
+interface PluginRow { id: string; organization_id: string; plugin_type: string; name: string; created_at: Date; }
+interface PluginVersionRow { id: string; organization_id: string; plugin_id: string; version: string; manifest: Record<string, unknown>; created_at: Date; }
+function pluginFromRow(row: PluginRow): PluginRecord { return { id: row.id, organizationId: row.organization_id, pluginType: row.plugin_type, name: row.name, createdAt: dateValue(row.created_at) }; }
+function pluginVersionFromRow(row: PluginVersionRow): PluginVersionRecord { return { id: row.id, organizationId: row.organization_id, pluginId: row.plugin_id, version: row.version, manifest: row.manifest, createdAt: dateValue(row.created_at) }; }
 interface SecretRow { id: string; organization_id: string; project_id: string | null; environment_id: string | null; name: string; provider: string; external_reference: string | null; encrypted_value: string | null; rotated_at: Date | null; created_at: Date; }
 function secretFromRow(row: SecretRow, rotatedValue?: string): SecretRecord { return { id: row.id, organizationId: row.organization_id, ...(row.project_id === null ? {} : { projectId: row.project_id }), ...(row.environment_id === null ? {} : { environmentId: row.environment_id }), name: row.name, provider: row.provider, ...(row.external_reference === null ? {} : { externalReference: row.external_reference }), maskedValue: rotatedValue === undefined ? row.encrypted_value === null ? '[EXTERNAL]' : '[REDACTED]' : maskValue(rotatedValue), ...(row.rotated_at === null ? {} : { rotatedAt: dateValue(row.rotated_at) }), createdAt: dateValue(row.created_at) }; }
 function maskValue(value: string): string { return value.length <= 4 ? '[REDACTED]' : `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`; }

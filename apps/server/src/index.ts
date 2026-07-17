@@ -143,6 +143,23 @@ export interface AiWorkerJobRecord {
   updatedAt?: string;
 }
 
+export interface PluginRecord {
+  id: string;
+  organizationId: string;
+  pluginType: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface PluginVersionRecord {
+  id: string;
+  organizationId: string;
+  pluginId: string;
+  version: string;
+  manifest: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface SecretRecord {
   id: string;
   organizationId: string;
@@ -208,6 +225,10 @@ export interface TenantRepository {
   leaseAiWorkerJob(workerId: string, organizationId: string): MaybePromise<AiWorkerJobRecord | undefined>;
   completeAiWorkerJob(organizationId: string, jobId: string, status: 'completed' | 'failed' | 'cancelled', result?: Record<string, unknown>): MaybePromise<AiWorkerJobRecord | undefined>;
   listAiWorkerJobs(organizationId: string): MaybePromise<AiWorkerJobRecord[]>;
+  createPlugin(organizationId: string, pluginType: string, name: string): MaybePromise<PluginRecord>;
+  listPlugins(organizationId: string): MaybePromise<PluginRecord[]>;
+  publishPluginVersion(organizationId: string, pluginId: string, version: string, manifest: Record<string, unknown>): MaybePromise<PluginVersionRecord | undefined>;
+  listPluginVersions(organizationId: string, pluginId: string): MaybePromise<PluginVersionRecord[]>;
   createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): MaybePromise<SecretRecord>;
   listSecrets(organizationId: string): MaybePromise<SecretRecord[]>;
   rotateSecret(organizationId: string, id: string, value: string): MaybePromise<SecretRecord | undefined>;
@@ -235,6 +256,8 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly storagePolicies = new Map<string, StoragePolicyRecord>();
   private readonly aiWorkers = new Map<string, AiWorkerRecord>();
   private readonly aiWorkerJobs = new Map<string, AiWorkerJobRecord>();
+  private readonly plugins = new Map<string, PluginRecord>();
+  private readonly pluginVersions = new Map<string, PluginVersionRecord[]>();
   private readonly secrets = new Map<string, SecretRecord>();
   private readonly secretValues = new Map<string, string>();
 
@@ -428,6 +451,27 @@ export class InMemoryTenantRepository implements TenantRepository {
     return [...this.aiWorkerJobs.values()].filter((job) => job.organizationId === organizationId);
   }
 
+  createPlugin(organizationId: string, pluginType: string, name: string): PluginRecord {
+    const plugin: PluginRecord = { id: `plugin-${randomUUID()}`, organizationId, pluginType, name, createdAt: new Date().toISOString() };
+    this.plugins.set(plugin.id, plugin);
+    return plugin;
+  }
+
+  listPlugins(organizationId: string): PluginRecord[] { return [...this.plugins.values()].filter((plugin) => plugin.organizationId === organizationId); }
+
+  publishPluginVersion(organizationId: string, pluginId: string, version: string, manifest: Record<string, unknown>): PluginVersionRecord | undefined {
+    const plugin = this.plugins.get(pluginId);
+    if (plugin === undefined || plugin.organizationId !== organizationId) return undefined;
+    const versions = this.pluginVersions.get(pluginId) ?? [];
+    if (versions.some((candidate) => candidate.version === version)) throw new Error(`plugin version already exists: ${version}`);
+    const published: PluginVersionRecord = { id: `plugin-version-${randomUUID()}`, organizationId, pluginId, version, manifest, createdAt: new Date().toISOString() };
+    versions.push(published);
+    this.pluginVersions.set(pluginId, versions);
+    return published;
+  }
+
+  listPluginVersions(organizationId: string, pluginId: string): PluginVersionRecord[] { return (this.pluginVersions.get(pluginId) ?? []).filter((version) => version.organizationId === organizationId).slice().reverse(); }
+
   async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
     const secret: SecretRecord = { id: `secret-${randomUUID()}`, organizationId, name: input.name, provider: input.provider, maskedValue: input.value === undefined ? '[EXTERNAL]' : maskSecretForApi(input.value), createdAt: new Date().toISOString(), ...(input.projectId === undefined ? {} : { projectId: input.projectId }), ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }), ...(input.externalReference === undefined ? {} : { externalReference: input.externalReference }) };
     this.secrets.set(secret.id, secret);
@@ -537,6 +581,8 @@ interface CreateAiWorkerBody { name: string; policy?: Record<string, unknown> }
 interface CreateAiWorkerJobBody { workerId: string; operation: string; request: Record<string, unknown> }
 interface CompleteAiWorkerJobBody { status: 'completed' | 'failed' | 'cancelled'; result?: Record<string, unknown> }
 interface CreateSecretBody { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }
+interface PublishPluginBody { pluginType: 'custom-action'; name: string; version: string; manifest: Record<string, unknown> }
+interface PublishPluginVersionBody { version: string; manifest: Record<string, unknown> }
 interface RotateSecretBody { value: string }
 interface CompareBranchesQuery { base?: string; head?: string }
 interface RepositoryContentQuery { path?: string; ref?: string }
@@ -614,6 +660,28 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
   const webhookDeliveries = new Set<string>();
   const authenticatedUsers = new WeakMap<object, string>();
   const validateManifest = createManifestValidator();
+  const enqueueTriggeredRun = async (organizationId: string, project: Project, test: TestRecord, trigger: string): Promise<RunRecord | undefined> => {
+    const run = await repository.createRun(organizationId, project.id, test.id);
+    const manifestDocument = await repository.getTestManifest(organizationId, test.id);
+    const job: Job = {
+      jobId: `job-${run.id}`,
+      runId: run.id,
+      organizationId,
+      projectId: project.id,
+      manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name },
+      ...(manifestDocument === undefined ? {} : { manifestDocument }),
+      requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 },
+      status: 'queued',
+      createdAt: run.createdAt,
+      executionMode: 'docker',
+    };
+    if (!await executionQueue.enqueue(organizationId, job)) {
+      await repository.updateRun(run.id, { status: 'failed', endedAt: new Date().toISOString() }, organizationId);
+      return undefined;
+    }
+    await repository.recordAuditEvent(organizationId, 'run.triggered', 'run', run.id, { trigger, projectId: project.id, testId: test.id });
+    return run;
+  };
   void app.register(cors, { origin: process.env['WEB_ORIGIN'] ?? true });
 
   app.addHook('preHandler', async (request, reply) => {
@@ -761,6 +829,47 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (job === undefined) return reply.code(404).send({ error: 'leased AI worker job not found' });
     await repository.recordAuditEvent(organizationId, `ai_worker_job.${job.status}`, 'ai_worker_job', job.id, { workerId: job.workerId, attempt: job.attempt });
     return reply.send(job);
+  });
+
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: PublishPluginBody }>('/v1/organizations/:organizationId/plugins', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body;
+    if (body?.pluginType !== 'custom-action' || typeof body.name !== 'string' || body.name.trim() === '' || !isSemver(body.version) || body.manifest === null || typeof body.manifest !== 'object' || Array.isArray(body.manifest)) return reply.code(400).send({ error: 'custom-action name, semver version, and object manifest are required' });
+    const plugin = await repository.createPlugin(request.params.organizationId, 'custom-action', body.name.trim());
+    try {
+      const version = await repository.publishPluginVersion(request.params.organizationId, plugin.id, body.version, body.manifest);
+      if (version === undefined) return reply.code(404).send({ error: 'plugin not found' });
+      await repository.recordAuditEvent(request.params.organizationId, 'plugin.published', 'plugin', plugin.id, { pluginType: plugin.pluginType, name: plugin.name, version: version.version });
+      return reply.code(201).send({ plugin, version });
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/plugins', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ plugins: await repository.listPlugins(request.params.organizationId) });
+  });
+
+  app.post<{ Params: { pluginId: string }; Headers: TenantHeaders; Body: PublishPluginVersionBody }>('/v1/plugins/:pluginId/versions', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const body = request.body;
+    if (!isSemver(body?.version) || body.manifest === null || typeof body.manifest !== 'object' || Array.isArray(body.manifest)) return reply.code(400).send({ error: 'semver version and object manifest are required' });
+    try {
+      const version = await repository.publishPluginVersion(organizationId, request.params.pluginId, body.version, body.manifest);
+      if (version === undefined) return reply.code(404).send({ error: 'plugin not found' });
+      await repository.recordAuditEvent(organizationId, 'plugin.version_published', 'plugin', request.params.pluginId, { version: version.version });
+      return reply.code(201).send(version);
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get<{ Params: { pluginId: string }; Headers: TenantHeaders }>('/v1/plugins/:pluginId/versions', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    return reply.send({ versions: await repository.listPluginVersions(organizationId, request.params.pluginId) });
   });
 
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateSecretBody }>('/v1/organizations/:organizationId/secrets', async (request, reply) => {
@@ -1378,10 +1487,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const test = await repository.getTest(organizationId, schedule.testId);
     const project = await repository.getProject(organizationId, schedule.projectId);
     if (test === undefined || project === undefined) return reply.code(404).send({ error: 'scheduled project or test not found' });
-    const run = await repository.createRun(organizationId, project.id, test.id);
-    const manifestDocument = await repository.getTestManifest(organizationId, test.id);
-    const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, ...(manifestDocument === undefined ? {} : { manifestDocument }), requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', priority: 0 };
-    if (!await executionQueue.enqueue(organizationId, job)) return reply.code(503).send({ error: 'run queue unavailable' });
+    const run = await enqueueTriggeredRun(organizationId, project, test, 'schedule');
+    if (run === undefined) return reply.code(503).send({ error: 'run queue unavailable' });
     return reply.code(202).send({ scheduleId: schedule.id, runId: run.id, status: run.status, trigger: 'schedule' });
   });
 
@@ -1401,6 +1508,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const fullName = typeof repositoryObject?.['full_name'] === 'string' ? repositoryObject['full_name'] : undefined;
     const organizationId = tenantId(request);
     let processed = false;
+    const triggeredRuns: string[] = [];
     if (organizationId !== undefined && await repository.getOrganization(organizationId) !== undefined && fullName !== undefined) {
       const linkedRepository = (await repository.listRepositories(organizationId)).find((record) => record.fullName === fullName);
       await repository.recordAuditEvent(organizationId, `github.webhook.${event}`, 'repository', linkedRepository?.id, {
@@ -1411,8 +1519,17 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
         pullRequestNumber: typeof pullRequestObject?.['number'] === 'number' ? pullRequestObject['number'] : undefined,
       });
       processed = linkedRepository !== undefined;
+      if (linkedRepository !== undefined && ['push', 'pull_request', 'create', 'branch_protection_rule'].includes(event)) {
+        for (const schedule of (await repository.listSchedules(organizationId)).filter((candidate) => candidate.enabled)) {
+          const project = await repository.getProject(organizationId, schedule.projectId);
+          const test = await repository.getTest(organizationId, schedule.testId);
+          if (project === undefined || test === undefined) continue;
+          const run = await enqueueTriggeredRun(organizationId, project, test, `github:${event}`);
+          if (run !== undefined) triggeredRuns.push(run.id);
+        }
+      }
     }
-    return reply.code(202).send({ accepted: true, processed, deliveryId, event, ...(fullName === undefined ? { reason: 'repository metadata missing' } : {}), ...(organizationId === undefined ? { reason: 'organization context unavailable; configure a trusted tenant header or gateway mapping' } : {}) });
+    return reply.code(202).send({ accepted: true, processed, deliveryId, event, triggeredRuns, ...(fullName === undefined ? { reason: 'repository metadata missing' } : {}), ...(organizationId === undefined ? { reason: 'organization context unavailable; configure a trusted tenant header or gateway mapping' } : {}) });
   });
 
   app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: Object.fromEntries(Object.entries({
@@ -1427,6 +1544,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/ai-worker-jobs': { get: {}, post: {} },
     '/v1/ai-workers/{workerId}/jobs/lease': { post: {} },
     '/v1/ai-worker-jobs/{jobId}/complete': { post: {} },
+    '/v1/organizations/{organizationId}/plugins': { get: {}, post: {} },
+    '/v1/plugins/{pluginId}/versions': { get: {}, post: {} },
     '/v1/organizations/{organizationId}/secrets': { get: {}, post: {} },
     '/v1/secrets/{secretId}/rotate': { post: {} },
     '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
@@ -1473,6 +1592,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
 }
 
 function secretEncryptionKey(): string { return process.env['OPENTESTPILOT_SECRET_KEY'] ?? 'open-test-pilot-development-key'; }
+function isSemver(value: unknown): value is string { return typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value); }
 function encryptSecretValue(value: string, key: string): string { const salt = randomBytes(16); const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return [salt, iv, cipher.getAuthTag(), body].map((part) => part.toString('base64url')).join('.'); }
 function decryptSecretValue(encoded: string, key: string): string { const parts = encoded.split('.').map((part) => Buffer.from(part, 'base64url')); if (parts.length !== 4) throw new Error('invalid encrypted secret'); const [salt, iv, tag, body] = parts as [Buffer, Buffer, Buffer, Buffer]; const decipher = createDecipheriv('aes-256-gcm', scryptSync(key, salt, 32), iv); decipher.setAuthTag(tag); return Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8'); }
 function maskSecretForApi(value: string): string { if (value.length <= 4) return '[REDACTED]'; return `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`; }

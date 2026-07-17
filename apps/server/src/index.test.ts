@@ -311,13 +311,19 @@ describe('OpenTestPilot server API', () => {
       const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Webhook org' } });
       const organizationId = organization.json<{ id: string }>().id;
       const linked = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/repositories`, headers: { 'x-organization-id': organizationId }, payload: { owner: 'octo', name: 'demo' } });
+      const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Webhook project' } });
+      const projectId = project.json<{ id: string }>().id;
+      const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Webhook test', manifestId: 'webhook-test' } });
+      const testId = test.json<{ id: string }>().id;
+      await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/schedules`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId, cron: '*/5 * * * *' } });
       const body = { action: 'opened', repository: { full_name: 'octo/demo' }, pull_request: { number: 7 } };
       const payload = JSON.stringify(body);
       const signature = `sha256=${createHmac('sha256', 'webhook-secret').update(payload).digest('hex')}`;
       const headers = { 'x-hub-signature-256': signature, 'x-github-delivery': 'delivery-1', 'x-github-event': 'pull_request', 'x-organization-id': organizationId };
       const accepted = await app.inject({ method: 'POST', url: '/v1/webhooks/github', headers, payload: body });
       expect(accepted.statusCode).toBe(202);
-      expect(accepted.json<{ processed: boolean }>().processed).toBe(true);
+      expect(accepted.json<{ processed: boolean; triggeredRuns: string[] }>().processed).toBe(true);
+      expect(accepted.json<{ triggeredRuns: string[] }>().triggeredRuns).toHaveLength(1);
       const duplicate = await app.inject({ method: 'POST', url: '/v1/webhooks/github', headers, payload: body });
       expect(duplicate.statusCode).toBe(200);
       expect(duplicate.json<{ duplicate: boolean }>().duplicate).toBe(true);
@@ -343,6 +349,22 @@ describe('OpenTestPilot server API', () => {
     const triggered = await app.inject({ method: 'POST', url: `/v1/schedules/${schedule.json<{ id: string }>().id}/trigger`, headers: { 'x-organization-id': organizationId } });
     expect(triggered.statusCode).toBe(202);
     expect(triggered.json<{ trigger: string; runId: string }>().trigger).toBe('schedule');
+    await app.close();
+  });
+
+  it('publishes tenant-scoped custom action plugin metadata and versions', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Plugin org' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const published = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/plugins`, headers: { 'x-organization-id': organizationId }, payload: { pluginType: 'custom-action', name: 'Company actions', version: '1.0.0', manifest: { apiVersion: '1.0.0', actions: [{ type: 'company.createOrder', title: 'Create order' }] } } });
+    expect(published.statusCode).toBe(201);
+    const pluginId = published.json<{ plugin: { id: string } }>().plugin.id;
+    const next = await app.inject({ method: 'POST', url: `/v1/plugins/${pluginId}/versions`, headers: { 'x-organization-id': organizationId }, payload: { version: '1.1.0', manifest: { apiVersion: '1.0.0', actions: [{ type: 'company.createOrder', title: 'Create order v2' }] } } });
+    expect(next.statusCode).toBe(201);
+    const versions = await app.inject({ method: 'GET', url: `/v1/plugins/${pluginId}/versions`, headers: { 'x-organization-id': organizationId } });
+    expect(versions.json<{ versions: Array<{ version: string }> }>().versions.map((version) => version.version)).toEqual(['1.1.0', '1.0.0']);
+    const duplicate = await app.inject({ method: 'POST', url: `/v1/plugins/${pluginId}/versions`, headers: { 'x-organization-id': organizationId }, payload: { version: '1.1.0', manifest: {} } });
+    expect(duplicate.statusCode).toBe(409);
     await app.close();
   });
 
