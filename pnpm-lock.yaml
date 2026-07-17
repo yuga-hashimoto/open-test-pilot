@@ -232,6 +232,9 @@ importers:
       '@open-test-pilot/appium-adapter':
         specifier: workspace:*
         version: link:../appium-adapter
+      '@open-test-pilot/failure-analysis':
+        specifier: workspace:*
+        version: link:../failure-analysis
       '@open-test-pilot/generator':
         specifier: workspace:*
         version: link:../generator

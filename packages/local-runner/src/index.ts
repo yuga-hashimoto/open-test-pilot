@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { executeMobileManifest, type MobileDriver } from '@open-test-pilot/appium-adapter';
+import { classifyFailure } from '@open-test-pilot/failure-analysis';
 import { generateMobileAppium, generatePlaywright } from '@open-test-pilot/generator';
 import type { Manifest } from '@open-test-pilot/manifest-schema';
 import { executeManifest, type CustomActionExecutor, type SecretValueProvider } from '@open-test-pilot/playwright-adapter';
@@ -99,7 +100,7 @@ async function runMobileManifest(manifest: Manifest, runId: string, runDir: stri
         status: action.status,
         startedAt,
         endedAt: new Date().toISOString(),
-        ...(action.error === undefined ? {} : { error: { message: action.error, category: 'UNKNOWN' as const } }),
+        ...(action.error === undefined ? {} : { error: { message: action.error, category: classifyFailure(action.error) } }),
         ...(action.artifacts === undefined ? {} : { artifacts: action.artifacts.flatMap((artifact) => {
           const artifactId = artifactIdByPath.get(artifact.path);
           return artifactId === undefined ? [] : [artifactId];

@@ -34,7 +34,7 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
 }
 
 export interface WorkerPolicy { allowedOperations: Array<AgentRequest['operation']>; maxRetries: number; allowPublish: boolean; }
-export const defaultWorkerPolicy: WorkerPolicy = { allowedOperations: ['analyze', 'analyze-failure', 'repair', 'review'], maxRetries: 2, allowPublish: false };
+export const defaultWorkerPolicy: WorkerPolicy = { allowedOperations: ['analyze', 'analyze-failure', 'repair', 'review'], maxRetries: 3, allowPublish: false };
 
 export function validateWorkerRequest(request: AgentRequest, policy: WorkerPolicy = defaultWorkerPolicy): void {
   if (!policy.allowedOperations.includes(request.operation)) throw new Error(`operation ${request.operation} is not allowed for this worker`);

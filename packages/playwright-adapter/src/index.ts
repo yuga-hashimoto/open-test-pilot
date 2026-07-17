@@ -96,6 +96,12 @@ function classifyError(error: unknown): FailureCategory {
   if (/locator|waiting for|to be visible|to have text/i.test(message)) {
     return 'LOCATOR_CHANGED';
   }
+  if (/timeout|timed out|waitUntil/i.test(message)) {
+    return 'WAIT_CONDITION_ERROR';
+  }
+  if (/assert|expect/i.test(message)) {
+    return 'PRODUCT_DEFECT';
+  }
   return 'UNKNOWN';
 }
 

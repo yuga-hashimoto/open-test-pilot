@@ -136,6 +136,8 @@ export interface ManifestStep {
   output?: Record<string, string>;
 }
 
+export type ScreenshotMode = 'none' | 'failure-only' | 'after' | 'before-and-after';
+
 export interface Manifest {
   schemaVersion: string;
   id: string;
@@ -151,7 +153,7 @@ export interface Manifest {
   steps: ManifestStep[];
   cleanup: ManifestStep[];
   functions?: ManifestFunction[];
-  artifacts: { screenshots: string; traces?: boolean };
+  artifacts: { screenshots: ScreenshotMode; traces?: boolean };
   runner: { minBrowsers: string[] };
   permissions: { networkAccess: boolean; fileSystem?: boolean };
   source: { repository: string; path: string };
@@ -249,7 +251,7 @@ export const manifestJsonSchema = {
       type: 'object',
       required: ['screenshots'],
       properties: {
-        screenshots: { type: 'string' },
+        screenshots: { enum: ['none', 'failure-only', 'after', 'before-and-after'] },
         traces: { type: 'boolean' },
       },
       additionalProperties: false,
