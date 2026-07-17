@@ -70,7 +70,7 @@
 - [x] Add result-importer coverage for JUnit, Vitest, Unit, Component, and Integration input variants and stable source mappings.
 - [x] Add retention purge, deletion audit events, and server tests for tenant isolation and dry-run behavior.
 - [x] Add live Web artifact/evidence views for uploaded screenshots, traces, DOM, accessibility, logs, network, generated code, failures, and reports.
-- [ ] Run PostgreSQL/Redis/S3-compatible MinIO smoke tests with actual external services; local in-memory and local-storage paths are verified.
+- [x] Run PostgreSQL/Redis/S3-compatible MinIO smoke tests with actual external services; local in-memory and local-storage paths are also verified.
 
 ### Task 4: Make CI/release artifacts executable
 
@@ -98,7 +98,7 @@
 - Create: `docs/ACCEPTANCE_EVIDENCE.md`
 
 - [x] Run the real personal Web scenario, including a real failure, evidence inspection, Codex Manifest repair, and successful rerun.
-- [ ] Run the real team PostgreSQL/Redis scenario and complete the GitHub App write scenario when external credentials are available.
+- [x] Run the real team PostgreSQL/Redis/MinIO scenario; complete the GitHub App write scenario when external credentials are available.
 - [x] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
 - [x] Run Android Appium; iOS capability probe is recorded as unavailable because no XCUITest simulator/device is configured.
 - [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
