@@ -349,6 +349,7 @@ interface CreateScheduleBody { projectId: string; testId: string; cron: string; 
 export interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
 interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: number }
+interface CreateGitHubPullRequestBody { title: string; head: string; base?: string; body?: string; draft?: boolean }
 interface PublishGitHubRunBody { repositoryId: string; headSha: string; issueNumber?: number; comment?: string }
 export interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
 interface CreateChangeRequestBody { title: string; description?: string }
@@ -523,6 +524,30 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
       const metadata = await github.getRepository(record.owner, record.name);
       const updated = await repository.updateRepository(organizationId, record.id, { fullName: metadata.fullName, defaultBranch: metadata.defaultBranch, private: metadata.private, githubRepositoryId: metadata.id, installationId });
       return updated === undefined ? reply.code(404).send({ error: 'repository not found' }) : reply.send(updated);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post<{ Params: { repositoryId: string }; Headers: TenantHeaders; Body: CreateGitHubPullRequestBody }>('/v1/repositories/:repositoryId/pull-requests', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support pull requests' });
+    const body = request.body;
+    if (typeof body?.title !== 'string' || body.title.trim() === '' || typeof body.head !== 'string' || body.head.trim() === '') return reply.code(400).send({ error: 'title and head are required' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App pull requests are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const github = new GitHubApiClient(installationToken.token);
+      const pullRequest = await github.createPullRequest(record.owner, record.name, { title: body.title.trim(), head: body.head.trim(), base: body.base?.trim() || record.defaultBranch, ...(body.body === undefined ? {} : { body: body.body }), draft: body.draft ?? true });
+      const local = await repository.createPullRequest(organizationId, pullRequest.htmlUrl);
+      return reply.code(201).send({ repositoryId: record.id, pullRequest, local });
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -890,6 +915,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
     '/v1/repositories/{repositoryId}': { get: {} },
     '/v1/repositories/{repositoryId}/sync': { post: {} },
+    '/v1/repositories/{repositoryId}/pull-requests': { post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },
     '/v1/tests/{id}/manifest': { get: {}, put: {} },

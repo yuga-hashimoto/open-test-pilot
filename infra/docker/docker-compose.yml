@@ -40,6 +40,15 @@ services:
       S3_SECRET_ACCESS_KEY: opentestpilot-dev-only
     depends_on: [postgres, redis, minio-init]
     ports: ["3001:3001"]
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.scheduler
+    environment:
+      OPENTESTPILOT_URL: http://server:3001
+      OPENTESTPILOT_ORGANIZATION_IDS: ${OPENTESTPILOT_ORGANIZATION_IDS:?set organization ids before starting scheduler}
+      OPENTESTPILOT_SCHEDULE_INTERVAL_MS: ${OPENTESTPILOT_SCHEDULE_INTERVAL_MS:-60000}
+    depends_on: [server]
   web:
     image: node:22-bookworm-slim
     working_dir: /workspace

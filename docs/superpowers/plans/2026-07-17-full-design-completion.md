@@ -103,3 +103,15 @@
 - [x] Run Android Appium; iOS capability probe is recorded as unavailable because no XCUITest simulator/device is configured.
 - [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
 - [x] Complete the requirement-by-requirement audit; the remaining unchecked items are external capability gates listed above.
+
+### Task 6: Make scheduled execution operational
+
+**Files:**
+- Create: `apps/scheduler/src/index.ts`
+- Modify: `packages/trigger-adapter/src/index.ts`
+- Modify: `infra/docker/docker-compose.yml`
+- Create: `infra/docker/Dockerfile.scheduler`
+
+- [x] Add deterministic five-field cron matching with wildcard, list, range, step, Sunday `0/7`, and standard day-field OR semantics.
+- [x] Add tenant-scoped scheduler polling, trigger calls, minute-level duplicate prevention, and an explicit environment-driven daemon entrypoint.
+- [x] Add focused unit tests, build the scheduler Docker image, and run a real poll/trigger smoke against the live server.

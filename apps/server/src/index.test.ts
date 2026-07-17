@@ -442,6 +442,18 @@ describe('repository persistence and sync', () => {
     expect(result.statusCode).toBe(503);
     await app.close();
   });
+
+  it('keeps GitHub App pull requests behind credential configuration', async () => {
+    delete process.env['GITHUB_APP_ID'];
+    delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+    delete process.env['GITHUB_INSTALLATION_ID'];
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'NoPullRequestApp' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'o', name: 'r' } })).json<{ id: string }>();
+    const result = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/pull-requests`, headers: { 'x-organization-id': org }, payload: { title: 'Repair', head: 'testpilot/repair' } });
+    expect(result.statusCode).toBe(503);
+    await app.close();
+  });
 });
 
 describe('schedule persistence', () => {

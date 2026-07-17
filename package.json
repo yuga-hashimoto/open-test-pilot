@@ -14,7 +14,8 @@
     "license:report": "node scripts/generate-license-report.mjs",
     "security:audit": "pnpm audit --audit-level high",
     "release:artifacts": "node scripts/build-release-artifacts.mjs",
-    "test:docker:smoke": "node --import tsx scripts/real-docker-runner-smoke.mjs"
+    "test:docker:smoke": "node --import tsx scripts/real-docker-runner-smoke.mjs",
+    "schedule:daemon": "pnpm --filter @open-test-pilot/scheduler-service start"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

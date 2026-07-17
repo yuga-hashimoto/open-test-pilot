@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TriggerRouter, validateCronExpression } from './index.js';
+import { TriggerRouter, cronMatches, validateCronExpression } from './index.js';
 
 describe('trigger adapter', () => {
   it('deduplicates webhook delivery IDs and routes by tenant project', () => {
@@ -12,5 +12,14 @@ describe('trigger adapter', () => {
   it('validates and normalizes cron schedules', () => {
     expect(validateCronExpression('0 9 * * 1')).toBe('0 9 * * 1');
     expect(() => validateCronExpression('every morning')).toThrow('five-field');
+    expect(() => validateCronExpression('0 9 ? * 1')).toThrow('five-field');
+  });
+
+  it('matches wildcard, stepped, range, and day-of-week schedules', () => {
+    expect(cronMatches(new Date(2026, 6, 17, 9, 30), '*/15 * * * *')).toBe(true);
+    expect(cronMatches(new Date(2026, 6, 17, 9, 31), '*/15 * * * *')).toBe(false);
+    expect(cronMatches(new Date(2026, 6, 20, 9, 0), '0 9 * * 1')).toBe(true);
+    expect(cronMatches(new Date(2026, 6, 21, 9, 0), '0 9 * * 1')).toBe(false);
+    expect(cronMatches(new Date(2026, 6, 17, 9, 0), '0 9 17 * *')).toBe(true);
   });
 });

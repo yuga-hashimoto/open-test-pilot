@@ -40,4 +40,22 @@ describe('web API client', () => {
     await api.listTests();
     expect(received).toMatchObject({ authorization: 'Bearer session-1', 'x-organization-id': 'org-1' });
   });
+
+  it('calls tenant-scoped GitHub sync and draft pull-request endpoints', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      const body = String(input).endsWith('/sync')
+        ? { id: 'repo-1', owner: 'owner', name: 'repo', fullName: 'owner/repo', defaultBranch: 'main', private: false, provider: 'github', createdAt: new Date().toISOString() }
+        : { repositoryId: 'repo-1', pullRequest: { number: 7, htmlUrl: 'https://github.com/owner/repo/pull/7', head: 'testpilot/repair', base: 'main' }, local: { id: 'pr-1', url: 'https://github.com/owner/repo/pull/7' } };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    await api.syncRepository('repo-1');
+    await api.createGitHubPullRequest('repo-1', { title: 'Repair', head: 'testpilot/repair', draft: true });
+    expect(calls[0]?.url).toBe('https://pilot.test/v1/repositories/repo-1/sync');
+    expect(calls[0]?.init?.headers).toMatchObject({ 'x-organization-id': 'org-1' });
+    expect(calls[1]?.url).toBe('https://pilot.test/v1/repositories/repo-1/pull-requests');
+    expect(calls[1]?.init?.method).toBe('POST');
+    expect(calls[1]?.init?.body).toContain('testpilot/repair');
+  });
 });

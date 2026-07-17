@@ -10,6 +10,7 @@ export interface ApiRunEvidence { failures: ApiFailure[]; artifacts: ApiArtifact
 export interface ApiChangeRequest { id: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string; }
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
+export interface ApiPullRequest { number: number; htmlUrl: string; head: string; base: string; }
 
 export interface TestPilotApi {
   listTests(): Promise<ApiTest[]>;
@@ -23,6 +24,8 @@ export interface TestPilotApi {
   getManifest(testId: string): Promise<ApiTestManifest>;
   updateManifest(testId: string, manifest: ApiTestManifest): Promise<{ testId: string; saved: boolean }>;
   listRepositories(): Promise<ApiRepository[]>;
+  syncRepository(repositoryId: string): Promise<ApiRepository>;
+  createGitHubPullRequest(repositoryId: string, input: { title: string; head: string; base?: string; body?: string; draft?: boolean }): Promise<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>;
   listChangeRequests(): Promise<ApiChangeRequest[]>;
   createChangeRequest(title: string, description?: string): Promise<ApiChangeRequest>;
   updateChangeRequest(id: string, patch: { status?: ApiChangeRequest['status']; description?: string }): Promise<ApiChangeRequest>;
@@ -62,6 +65,8 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async getManifest(testId) { return await request<ApiTestManifest>(`/v1/tests/${pathId(testId)}/manifest`); },
     async updateManifest(testId, manifest) { return await request<{ testId: string; saved: boolean }>(`/v1/tests/${pathId(testId)}/manifest`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(manifest) }); },
     async listRepositories() { return (await request<{ repositories: ApiRepository[] }>(`/v1/organizations/${pathId(config.organizationId)}/repositories`)).repositories; },
+    async syncRepository(repositoryId) { return await request<ApiRepository>(`/v1/repositories/${pathId(repositoryId)}/sync`, { method: 'POST' }); },
+    async createGitHubPullRequest(repositoryId, input) { return await request<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async listChangeRequests() { return (await request<{ changeRequests: ApiChangeRequest[] }>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`)).changeRequests; },
     async createChangeRequest(title, description) { return await request<ApiChangeRequest>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, ...(description === undefined ? {} : { description }) }) }); },
     async updateChangeRequest(id, patch) { return await request<ApiChangeRequest>(`/v1/change-requests/${pathId(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },
