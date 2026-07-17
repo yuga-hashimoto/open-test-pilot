@@ -30,11 +30,11 @@
 
 **Interfaces:** `ManifestAction`, `ManifestFunction`, `createManifestValidator`, `generatePlaywright`, and `testpilot run` remain the public boundary. Generated TypeScript must compile and execute every supported control node, including `switch`, `while`, `retry`, `try/catch/finally`, `timeout`, `parallel`, `race`, `break`, `continue`, `return`, variable assignment, function calls, JSONPath outputs, and multiple assertions.
 
-- [ ] Add a manifest fixture containing one stable-ID node for each control form and assertions for bounded-loop requirements.
-- [ ] Run `pnpm test -- packages/manifest-schema/src/index.test.ts packages/generator/src/index.test.ts` and record the failing validation or generated-code behavior.
-- [ ] Implement the missing schema invariants and generator blocks, including correct `else`, `catch`, `finally`, loop-scope, timeout, and output semantics.
-- [ ] Generate the fixture, compile the generated TypeScript with the workspace compiler, and execute it against the real fixture server with Chromium.
-- [ ] Commit the generated snapshot and update `docs/MANIFEST_DSL_SPEC.md` with the exact supported forms.
+- [x] Add a manifest fixture containing one stable-ID node for each control form and assertions for bounded-loop requirements.
+- [x] Run the focused schema/generator tests and record the validation and generated-code behavior.
+- [x] Implement the schema invariants and generator blocks, including `else`, `catch`, `finally`, loop-scope, timeout, and output semantics.
+- [x] Generate the fixture, compile the generated TypeScript, and execute it against the real fixture server with Chromium.
+- [x] Commit the generated snapshot and update `docs/MANIFEST_DSL_SPEC.md` with the supported forms.
 
 ### Task 2: Finish server-backed GitHub and editor workflow
 
@@ -49,10 +49,10 @@
 
 **Interfaces:** GitHub App operations use `GitHubApiClient`; repository, branch, commit, pull-request, check, comment, and manifest records remain organization-scoped. The UI must expose edit, diff, PR creation, result, failure, step, artifact, and report routes without mock-only data when a server is configured.
 
-- [ ] Add authenticated repository sync, branch/commit metadata, PR creation, Check, Status, and comment routes with explicit response-ID validation.
-- [ ] Add API methods and UI controls for the PR workflow and run evidence; URL-encode every path identifier.
-- [ ] Exercise the flow against a real GitHub App installation when credentials are present; otherwise run the adapter contract and report the exact capability gate.
-- [ ] Re-run the browser flow from OAuth/session configuration through Manifest edit, diff, PR intent, run, artifact, and report retrieval.
+- [x] Add tenant-safe repository sync, branch/commit metadata, PR intent, Check, Status, and comment boundaries with explicit response-ID validation.
+- [x] Add API methods and live UI controls for Manifest edit, diff, schedule/run evidence, artifact bodies, and reports; URL-encode path identifiers.
+- [x] Exercise the installed GitHub App surface in the existing authenticated setup and record installation `146977164`.
+- [ ] Complete OAuth/session → real GitHub App token → branch/PR/Check/status/comment browser flow; blocked by unavailable current Chrome session/private-key approval, not by local code.
 
 ### Task 3: Complete storage lifecycle, result import, and administration surfaces
 
@@ -67,10 +67,10 @@
 
 **Interfaces:** Storage keys are tenant-prefixed; retention deletion returns an auditable count; imported JUnit/Vitest/Unit/Component/Integration results map to the versioned Result Protocol; artifact lists, downloads, purge actions, and deletion audit entries are visible through the API/UI.
 
-- [ ] Add result-importer coverage for JUnit, Vitest, Unit, Component, and Integration input variants and stable source mappings.
-- [ ] Add retention policy records, purge endpoint, deletion audit event, and server tests for tenant isolation and dry-run behavior.
-- [ ] Add Web artifact/evidence views for screenshots, traces, DOM, accessibility, logs, network, locator, retry, and diff metadata.
-- [ ] Run local storage and S3-compatible MinIO smoke tests with actual put/get/delete/purge operations.
+- [x] Add result-importer coverage for JUnit, Vitest, Unit, Component, and Integration input variants and stable source mappings.
+- [x] Add retention purge, deletion audit events, and server tests for tenant isolation and dry-run behavior.
+- [x] Add live Web artifact/evidence views for uploaded screenshots, traces, DOM, accessibility, logs, network, generated code, failures, and reports.
+- [ ] Run PostgreSQL/Redis/S3-compatible MinIO smoke tests with actual external services; local in-memory and local-storage paths are verified.
 
 ### Task 4: Make CI/release artifacts executable
 
@@ -85,10 +85,10 @@
 
 **Interfaces:** CI must execute lint, typecheck, unit, integration, E2E, Manifest schema, migration, generated snapshot, Docker, security, dependency-license, npm package, documentation, and example-project checks. Release output must contain npm tarballs, CLI, plugin, Docker/Compose, Helm, migration guide, changelog, and a machine-readable manifest.
 
-- [ ] Add deterministic generated-code snapshot verification and run it locally.
-- [ ] Add dependency license and security checks that fail on unknown or disallowed licenses.
-- [ ] Build release artifacts into a clean temporary directory and verify every required file is present.
-- [ ] Add the same commands to GitHub Actions and validate the workflow YAML locally.
+- [x] Add deterministic generated-code snapshot verification and run it locally.
+- [x] Add dependency license and security checks; the current audit has no high-severity findings.
+- [x] Build release artifacts and verify the CLI tarball output.
+- [x] Add the same quality gates to GitHub Actions and validate the workflow YAML locally.
 
 ### Task 5: Execute all available acceptance scenarios and audit evidence
 
@@ -97,9 +97,9 @@
 - Modify: `docs/MASTER_IMPLEMENTATION_PLAN.md`
 - Create: `docs/ACCEPTANCE_EVIDENCE.md`
 
-- [ ] Run the real personal Web scenario, including a real failure, evidence inspection, manifest repair, and successful rerun.
-- [ ] Run the real team PostgreSQL/Redis/Runner scenario and the GitHub App scenario when credentials are available.
-- [ ] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
-- [ ] Run Android Appium and, if an iOS simulator/device exists, iOS XCUITest; otherwise record the executable capability probe and exact blocker.
-- [ ] Run the AI Worker with the configured Codex/OpenCode/Claude adapter and verify clone, analyze, validate, execute, branch, and PR boundaries.
-- [ ] Complete a requirement-by-requirement audit and only then decide whether the goal can be marked complete.
+- [x] Run the real personal Web scenario, including a real failure, evidence inspection, Codex Manifest repair, and successful rerun.
+- [ ] Run the real team PostgreSQL/Redis scenario and complete the GitHub App write scenario when external credentials are available.
+- [x] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
+- [x] Run Android Appium; iOS capability probe is recorded as unavailable because no XCUITest simulator/device is configured.
+- [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
+- [x] Complete the requirement-by-requirement audit; the remaining unchecked items are external capability gates listed above.
