@@ -105,7 +105,7 @@
 - [x] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
 - [x] Run Android Appium and iOS Appium/XCUITest on Android 16/API 36 and iOS 26.4.1 simulators, asserting localized Settings UI and capturing screenshots/page source.
 - [x] Declare the XCUITest driver, forward iOS device/bundle/WDA capabilities through the adapter, and extend the WebdriverIO session retry timeout to cover slow WDA builds; verify both WDA reuse and `useNewWDA=true` paths.
-- [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
+- [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, result upload, branch creation, Draft PR publication, and GitHub result notification. Production deployment still supplies its own GitHub credentials.
 - [x] Complete the requirement-by-requirement audit; the remaining unchecked items are external capability gates listed above.
 
 ### Task 6: Make scheduled execution operational
