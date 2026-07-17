@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -35,8 +35,37 @@ describe('AI repair workflow', () => {
     expect(result.published).toBeUndefined();
   });
 
+  it('applies the proposed Manifest before validation and rerun', async () => {
+    const workspaceDirectory = await mkdtemp(join(tmpdir(), 'testpilot-ai-proposal-'));
+    await mkdir(join(workspaceDirectory, 'tests'), { recursive: true });
+    await writeFile(join(workspaceDirectory, 'tests/login.yaml'), 'name: Original\n', 'utf8');
+    const observed: string[] = [];
+    const result = await executeRepairWorkflow(request, {
+      rootDirectory: workspaceDirectory,
+      workspace: { async prepare() { return workspaceDirectory; } },
+      worker,
+      validate: async (cwd) => { observed.push(`validate:${await readFile(join(cwd, 'tests/login.yaml'), 'utf8')}`); return { passed: true }; },
+      run: async (cwd) => { observed.push(`run:${await readFile(join(cwd, 'tests/login.yaml'), 'utf8')}`); return { passed: true }; },
+      policy: { allowedOperations: ['repair'], maxRetries: 2, allowPublish: false },
+    });
+    expect(result.execution?.passed).toBe(true);
+    expect(observed).toEqual(['validate:name: Repaired\n', 'run:name: Repaired\n']);
+  });
+
   it('rejects repair requests without the app-code safety constraint', async () => {
     const unsafeRequest: AgentRequest = { requestId: request.requestId, protocolVersion: request.protocolVersion, operation: request.operation, repository: request.repository, ...(request.requestArtifacts === undefined ? {} : { requestArtifacts: request.requestArtifacts }) };
     await expect(executeRepairWorkflow(unsafeRequest, { rootDirectory: '/tmp/testpilot-ai', workspace, worker, validate: async () => ({ passed: true }), run: async () => ({ passed: true }) })).rejects.toThrow('forbidAppCodeChanges');
+  });
+
+  it('rejects a proposed Manifest path outside the prepared workspace', async () => {
+    const unsafePathRequest: AgentRequest = { ...request, requestId: 'repair-outside', requestArtifacts: ['../outside.yaml'] };
+    const workspaceDirectory = await mkdtemp(join(tmpdir(), 'testpilot-ai-path-'));
+    await expect(executeRepairWorkflow(unsafePathRequest, {
+      rootDirectory: workspaceDirectory,
+      workspace: { async prepare() { return workspaceDirectory; } },
+      worker,
+      validate: async () => ({ passed: true }),
+      run: async () => ({ passed: true }),
+    })).rejects.toThrow('stay within the workspace');
   });
 });

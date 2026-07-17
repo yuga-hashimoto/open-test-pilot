@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CodexCodeWorker, defaultWorkerPolicy, parseStructuredAgentResult, validateWorkerRequest } from './index.js';
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRequest } from '@open-test-pilot/agent-protocol';
@@ -34,5 +34,16 @@ describe('AI Worker safety policy', () => {
     const result = await worker.handle(request('analyze'));
     expect(result.status).toBe('completed');
     expect(result.findings[0]?.type).toBe('codex-analysis');
+  });
+
+  it('executes the Codex worker in the workspace supplied by the repair workflow', async () => {
+    const workerDirectory = await mkdtemp(join(tmpdir(), 'open-test-pilot-codex-worker-home-'));
+    const workspaceDirectory = await mkdtemp(join(tmpdir(), 'open-test-pilot-codex-worker-workspace-'));
+    const command = join(workerDirectory, 'agent.mjs');
+    await writeFile(command, '#!/usr/bin/env node\nconst prompt = process.argv.at(-1);\nconst requestId = JSON.parse(prompt.split("\\n").at(-1)).requestId;\nconsole.log(JSON.stringify({ requestId, protocolVersion: "1.0.0", status: "completed", findings: [{ type: "cwd", severity: "info", source: { file: "workspace" }, message: process.cwd() }] }));\n', 'utf8');
+    await chmod(command, 0o755);
+    const worker = new CodexCodeWorker({ cwd: workerDirectory, command, args: [] });
+    const result = await worker.handleInDirectory(request('analyze'), workspaceDirectory);
+    expect(result.findings[0]?.message).toBe(await realpath(workspaceDirectory));
   });
 });

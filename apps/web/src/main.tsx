@@ -15,6 +15,7 @@ import {
   type ApiChangeRequest,
   type ApiMember,
   type ApiProject,
+  type ApiPullRequestSummary,
   type ApiRepository,
   type ApiRun,
   type ApiRunResult,
@@ -1767,6 +1768,10 @@ function GitHubView({
   const [comparison, setComparison] = useState<
     ApiBranchComparison | undefined
   >();
+  const [pullRequests, setPullRequests] = useState<ApiPullRequestSummary[]>([]);
+  const [manifestPath, setManifestPath] = useState("tests/login.yaml");
+  const [manifestRef, setManifestRef] = useState("main");
+  const [manifestFile, setManifestFile] = useState<{ path: string; sha: string; content: string } | undefined>();
   const [newBranch, setNewBranch] = useState("testpilot/repair/repair-live-2");
   const [branchBaseSha, setBranchBaseSha] = useState("");
   const [commitPath, setCommitPath] = useState("tests/repair.yaml");
@@ -1788,6 +1793,17 @@ function GitHubView({
       .catch((error) =>
         setMessage(
           error instanceof Error ? error.message : "Branch listing failed",
+        ),
+      );
+  }, [api, selected]);
+  useEffect(() => {
+    if (api === undefined || selected === undefined) return;
+    void api
+      .listPullRequests(selected.id, "all")
+      .then(setPullRequests)
+      .catch((error) =>
+        setMessage(
+          error instanceof Error ? error.message : "Pull request history failed",
         ),
       );
   }, [api, selected]);
@@ -1841,6 +1857,18 @@ function GitHubView({
         setMessage(
           error instanceof Error ? error.message : "Branch comparison failed",
         ),
+      );
+  };
+  const loadManifestFile = () => {
+    if (api === undefined || selected === undefined || manifestPath.trim() === "") return;
+    void api
+      .getRepositoryFile(selected.id, manifestPath.trim(), manifestRef.trim() || undefined)
+      .then((file) => {
+        setManifestFile(file);
+        setMessage(`Loaded ${file.path} @ ${manifestRef.trim() || selected.defaultBranch}`);
+      })
+      .catch((error) =>
+        setMessage(error instanceof Error ? error.message : "Repository file load failed"),
       );
   };
   const createBranch = () => {
@@ -2006,6 +2034,41 @@ function GitHubView({
               </div>
             </div>
           )}
+        </div>
+        <div className="panel-header">
+          <div>
+            <h2>Manifest source and pull request history</h2>
+            <p>{pullRequests.length} open/closed pull requests loaded from GitHub</p>
+          </div>
+        </div>
+        <div className="live-list-body">
+          <label className="editor-form-field">
+            Manifest path
+            <input value={manifestPath} onChange={(event) => setManifestPath(event.target.value)} />
+          </label>
+          <label className="editor-form-field">
+            Git ref
+            <input value={manifestRef} onChange={(event) => setManifestRef(event.target.value)} />
+          </label>
+          <button className="text-button" onClick={loadManifestFile} disabled={!live || selected === undefined}>
+            Load repository Manifest →
+          </button>
+          {manifestFile !== undefined && (
+            <div className="live-list-row">
+              <div>
+                <b>{manifestFile.path} · {manifestFile.sha}</b>
+                <pre className="manifest-code">{manifestFile.content}</pre>
+              </div>
+            </div>
+          )}
+          {pullRequests.map((pullRequest) => (
+            <div className="live-list-row" key={pullRequest.number}>
+              <div>
+                <b>#{pullRequest.number} · {pullRequest.title}</b>
+                <span>{pullRequest.state} · {pullRequest.head} → {pullRequest.base} · {pullRequest.htmlUrl}</span>
+              </div>
+            </div>
+          ))}
         </div>
         <div className="panel-header">
           <div>

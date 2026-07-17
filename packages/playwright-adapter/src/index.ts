@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 import type { Manifest, ManifestAction } from '@open-test-pilot/manifest-schema';
-import type { ActionResult, Artifact, FailureCategory, StepResult, TestRunResult } from '@open-test-pilot/result-schema';
+import { redactSecrets, type ActionResult, type Artifact, type FailureCategory, type StepResult, type TestRunResult } from '@open-test-pilot/result-schema';
 
 export interface ExecuteManifestOptions {
   outputDir: string;
@@ -14,8 +14,9 @@ export interface ExecuteManifestOptions {
   secretProviders?: Record<string, SecretValueProvider>;
 }
 
+export interface CustomActionPermissions { network?: string[]; filesystem?: { read?: string[]; write?: string[] }; secrets?: string[]; }
 export interface CustomActionContext { runId: string; getSecret(name: string): Promise<string | undefined>; writeArtifact(name: string, body: Uint8Array, contentType: string): Promise<string>; }
-export interface CustomActionExecutor { execute(context: CustomActionContext, input: Record<string, unknown>): Promise<unknown>; }
+export interface CustomActionExecutor { permissions?: CustomActionPermissions; execute(context: CustomActionContext, input: Record<string, unknown>): Promise<unknown>; }
 export interface SecretValueProvider { get(name: string): Promise<string | undefined>; }
 
 function now(): string {
@@ -314,9 +315,24 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       return;
     }
     case 'custom.action': {
-      const executor = options.customActions?.[action.actionType ?? action.name ?? action.id];
+      const actionName = action.actionType ?? action.name ?? action.id;
+      const executor = options.customActions?.[actionName];
       if (executor === undefined) throw new Error(`Custom Action is not registered: ${action.actionType ?? action.name ?? action.id}`);
-      context.stepOutputs[action.id] = await executor.execute({ runId: options.runId ?? 'local-run', getSecret: async (name) => context.secrets[name] ?? process.env[name], writeArtifact: context.writeArtifact }, (resolveAny(action.input ?? {}, manifest, context) as Record<string, unknown>));
+      const permissions = executor.permissions;
+      if ((permissions?.network?.length ?? 0) > 0 && manifest.permissions.networkAccess !== true) throw new Error(`Custom Action '${actionName}' requires network permission but the Manifest denies network access`);
+      if (permissions?.filesystem !== undefined && manifest.permissions.fileSystem !== true) throw new Error(`Custom Action '${actionName}' requires filesystem permission but the Manifest denies filesystem access`);
+      const customContext: CustomActionContext = {
+        runId: options.runId ?? 'local-run',
+        getSecret: async (name) => {
+          if (!permissions?.secrets?.includes(name)) throw new Error(`Custom Action '${actionName}' is not allowed to read secret '${name}'`);
+          return context.secrets[name] ?? process.env[name];
+        },
+        writeArtifact: async (name, body, contentType) => {
+          if (!permissions?.filesystem?.write?.includes(name)) throw new Error(`Custom Action '${actionName}' is not allowed to write artifact '${name}'`);
+          return context.writeArtifact(name, body, contentType);
+        },
+      };
+      context.stepOutputs[action.id] = await executor.execute(customContext, (resolveAny(action.input ?? {}, manifest, context) as Record<string, unknown>));
       return;
     }
     case 'mobile.launch':
@@ -445,7 +461,7 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const artifactId = await addArtifact(artifacts, options.outputDir, 'runner-log', 'logs/runner-error.log', message);
+    const artifactId = await addArtifact(artifacts, options.outputDir, 'runner-log', 'logs/runner-error.log', redactText(message, executionContext.secrets));
     const stepId = manifest.steps[0]?.id ?? 'runner';
     steps.push({ stepId, status: 'failed', startedAt, endedAt: now(), actions: [{ actionId: 'runner-start', type: 'runner.start', status: 'failed', startedAt, endedAt: now(), error: { message, category: classifyError(error) }, artifacts: [artifactId] }] });
   } finally {
@@ -456,12 +472,12 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
       await browserContext.tracing.stop({ path: absolutePath });
       artifacts.push({ id: `artifact-${artifacts.length + 1}`, type: 'trace', path: relativePath, createdAt: now() });
     }
-    if (consoleLog.length > 0) await addArtifact(artifacts, options.outputDir, 'console', 'logs/console.log', consoleLog.join('\n'));
-    if (networkLog.length > 0) await addArtifact(artifacts, options.outputDir, 'network', 'logs/network.log', networkLog.join('\n'));
+    if (consoleLog.length > 0) await addArtifact(artifacts, options.outputDir, 'console', 'logs/console.log', redactText(consoleLog.join('\n'), executionContext.secrets));
+    if (networkLog.length > 0) await addArtifact(artifacts, options.outputDir, 'network', 'logs/network.log', redactText(networkLog.join('\n'), executionContext.secrets));
     await browser?.close();
   }
 
-  return {
+  const result: TestRunResult = {
     runId,
     testId: manifest.id,
     manifestId: manifest.id,
@@ -472,6 +488,11 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
     steps,
     artifacts,
   };
+  return redactSecrets(result, Object.values(executionContext.secrets));
+}
+
+function redactText(value: string, secrets: Record<string, string>): string {
+  return Object.values(secrets).filter((secret) => secret.length > 0).reduce((text, secret) => text.replaceAll(secret, '[REDACTED]'), value);
 }
 
 async function resolveManifestSecrets(manifest: Manifest, providers: Record<string, SecretValueProvider> | undefined): Promise<Record<string, string>> {

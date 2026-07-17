@@ -89,6 +89,8 @@ export interface GitHubCommitFileInput { branch: string; path: string; content: 
 export interface GitHubBranch { name: string; sha: string; }
 export interface GitHubCompareFile { filename: string; status: string; additions: number; deletions: number; changes: number; }
 export interface GitHubBranchComparison { status: string; aheadBy: number; behindBy: number; htmlUrl?: string; files: GitHubCompareFile[]; }
+export interface GitHubFile { path: string; sha: string; content: string; }
+export interface GitHubPullRequestSummary { number: number; htmlUrl: string; title: string; state: 'open' | 'closed'; head: string; base: string; mergedAt?: string; updatedAt?: string; }
 
 export class GitHubApiClient {
   public constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -135,6 +137,24 @@ export class GitHubApiClient {
   public async compareBranches(owner: string, repository: string, base: string, head: string): Promise<GitHubBranchComparison> {
     const body = await this.request<{ status?: string; ahead_by?: number; behind_by?: number; html_url?: string; files?: Array<{ filename?: string; status?: string; additions?: number; deletions?: number; changes?: number }> }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/compare/${encodeURIComponent(`${base}...${head}`)}`, { method: 'GET' });
     return { status: body.status ?? 'unknown', aheadBy: body.ahead_by ?? 0, behindBy: body.behind_by ?? 0, ...(body.html_url === undefined ? {} : { htmlUrl: body.html_url }), files: (body.files ?? []).flatMap((file) => file.filename === undefined ? [] : [{ filename: file.filename, status: file.status ?? 'modified', additions: file.additions ?? 0, deletions: file.deletions ?? 0, changes: file.changes ?? 0 }]) };
+  }
+
+  public async getFile(owner: string, repository: string, path: string, ref?: string): Promise<GitHubFile> {
+    const query = ref === undefined ? '' : `?ref=${encodeURIComponent(ref)}`;
+    const body = await this.request<{ path?: string; sha?: string; encoding?: string; content?: string }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${path.split('/').map(encodeURIComponent).join('/')}${query}`, { method: 'GET' });
+    if (body.path === undefined || body.sha === undefined || body.content === undefined) throw new Error('GitHub file response was incomplete');
+    const content = body.encoding === 'base64' ? Buffer.from(body.content.replaceAll('\n', ''), 'base64').toString('utf8') : body.content;
+    return { path: body.path, sha: body.sha, content };
+  }
+
+  public async listPullRequests(owner: string, repository: string, state: 'open' | 'closed' | 'all' = 'open'): Promise<GitHubPullRequestSummary[]> {
+    const pullRequests: GitHubPullRequestSummary[] = [];
+    for (let page = 1; ; page += 1) {
+      const body = await this.request<Array<{ number?: number; html_url?: string; title?: string; state?: 'open' | 'closed'; head?: { ref?: string }; base?: { ref?: string }; merged_at?: string | null; updated_at?: string }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/pulls?state=${state}&per_page=100&page=${page}`, { method: 'GET' });
+      const pageItems = body.flatMap((item) => item.number === undefined || item.html_url === undefined || item.title === undefined || item.state === undefined || item.head?.ref === undefined || item.base?.ref === undefined ? [] : [{ number: item.number, htmlUrl: item.html_url, title: item.title, state: item.state, head: item.head.ref, base: item.base.ref, ...(item.merged_at === null || item.merged_at === undefined ? {} : { mergedAt: item.merged_at }), ...(item.updated_at === undefined ? {} : { updatedAt: item.updated_at }) }]);
+      pullRequests.push(...pageItems);
+      if (pageItems.length < 100) return pullRequests;
+    }
   }
 
   public async createBranch(owner: string, repository: string, branch: string, baseSha: string): Promise<void> {

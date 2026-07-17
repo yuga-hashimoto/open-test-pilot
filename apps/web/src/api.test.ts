@@ -78,6 +78,21 @@ describe('web API client', () => {
     expect(calls).toEqual(['https://pilot.test/v1/repositories/repo-1/branches', 'https://pilot.test/v1/repositories/repo-1/compare?base=main&head=repair']);
   });
 
+  it('loads a Manifest file and open or closed pull request history', async () => {
+    const calls: string[] = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input) => {
+      const url = String(input);
+      calls.push(url);
+      const body = url.includes('/contents')
+        ? { repositoryId: 'repo-1', file: { path: 'tests/login.yaml', sha: 'sha-1', content: 'name: Login\n' } }
+        : { repositoryId: 'repo-1', state: 'all', pullRequests: [{ number: 12, htmlUrl: 'https://github.com/owner/repo/pull/12', title: 'Closed repair', state: 'closed', head: 'repair/12', base: 'main' }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    await expect(api.getRepositoryFile('repo-1', 'tests/login.yaml', 'main')).resolves.toMatchObject({ content: 'name: Login\n', sha: 'sha-1' });
+    await expect(api.listPullRequests('repo-1', 'all')).resolves.toEqual([expect.objectContaining({ number: 12, state: 'closed' })]);
+    expect(calls).toEqual(['https://pilot.test/v1/repositories/repo-1/contents?path=tests%2Flogin.yaml&ref=main', 'https://pilot.test/v1/repositories/repo-1/pull-requests?state=all']);
+  });
+
   it('loads and updates the tenant administration surface', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {

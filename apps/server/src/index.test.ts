@@ -606,6 +606,46 @@ describe('repository persistence and sync', () => {
       await app.close();
     }
   });
+
+  it('reads repository contents and the complete pull request history through the App installation token', async () => {
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const keyPath = join(tmpdir(), `testpilot-repository-read-${Date.now()}.pem`);
+    await writeFile(keyPath, privateKeyPem);
+    process.env['GITHUB_APP_ID'] = '67890';
+    process.env['GITHUB_PRIVATE_KEY_PATH'] = keyPath;
+    process.env['GITHUB_INSTALLATION_ID'] = '456';
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Repository Read Org' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'owner', name: 'repo' } })).json<{ id: string }>();
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      const body = url.includes('access_tokens')
+        ? { token: 'ghs_repository_read', expires_at: '2026-12-31T23:59:59Z' }
+        : url.includes('/contents/tests/login.yaml')
+          ? { path: 'tests/login.yaml', sha: 'file-sha-1', encoding: 'base64', content: Buffer.from('name: Login\n').toString('base64') }
+          : [{ number: 12, html_url: 'https://github.com/owner/repo/pull/12', title: 'Closed repair', state: 'closed', head: { ref: 'repair/12' }, base: { ref: 'main' }, merged_at: '2026-07-17T00:00:00Z', updated_at: '2026-07-17T00:00:00Z' }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const file = await app.inject({ method: 'GET', url: `/v1/repositories/${repo.id}/contents?path=tests%2Flogin.yaml&ref=main`, headers: { 'x-organization-id': org } });
+      const pullRequests = await app.inject({ method: 'GET', url: `/v1/repositories/${repo.id}/pull-requests?state=all`, headers: { 'x-organization-id': org } });
+      expect(file.statusCode).toBe(200);
+      expect(file.json<{ file: { path: string; sha: string; content: string } }>().file).toEqual({ path: 'tests/login.yaml', sha: 'file-sha-1', content: 'name: Login\n' });
+      expect(pullRequests.statusCode).toBe(200);
+      expect(pullRequests.json<{ pullRequests: Array<{ number: number; state: string; mergedAt?: string }> }>().pullRequests).toEqual([expect.objectContaining({ number: 12, state: 'closed', mergedAt: '2026-07-17T00:00:00Z' })]);
+      expect(calls).toEqual(expect.arrayContaining(['GET https://api.github.com/repos/owner/repo/contents/tests/login.yaml?ref=main', 'GET https://api.github.com/repos/owner/repo/pulls?state=all&per_page=100&page=1'].map((methodUrl) => methodUrl.slice(4))));
+    } finally {
+      vi.unstubAllGlobals();
+      await unlink(keyPath).catch(() => undefined);
+      delete process.env['GITHUB_APP_ID'];
+      delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+      delete process.env['GITHUB_INSTALLATION_ID'];
+      await app.close();
+    }
+  });
 });
 
 describe('schedule persistence', () => {

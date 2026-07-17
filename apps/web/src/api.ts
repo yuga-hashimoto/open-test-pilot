@@ -15,6 +15,8 @@ export interface ApiChangeRequest { id: string; title: string; description: stri
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
 export interface ApiPullRequest { number: number; htmlUrl: string; head: string; base: string; }
+export interface ApiPullRequestSummary { number: number; htmlUrl: string; title: string; state: 'open' | 'closed'; head: string; base: string; mergedAt?: string; updatedAt?: string; }
+export interface ApiRepositoryFile { repositoryId: string; file: { path: string; sha: string; content: string }; }
 export interface ApiBranch { name: string; sha: string; }
 export interface ApiBranchComparison { status: string; aheadBy: number; behindBy: number; htmlUrl?: string; files: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }>; }
 export interface ApiProject { id: string; organizationId: string; name: string; createdAt: string; }
@@ -54,6 +56,8 @@ export interface TestPilotApi {
   createBranch(repositoryId: string, input: { branch: string; baseSha: string }): Promise<{ repositoryId: string; branch: string; baseSha: string }>;
   commitFile(repositoryId: string, input: { branch: string; path: string; content: string; message: string; sha?: string }): Promise<{ repositoryId: string; branch: string; path: string; commitSha: string }>;
   compareBranches(repositoryId: string, base: string, head: string): Promise<{ repositoryId: string; base: string; head: string; comparison: ApiBranchComparison }>;
+  getRepositoryFile(repositoryId: string, path: string, ref?: string): Promise<ApiRepositoryFile['file']>;
+  listPullRequests(repositoryId: string, state?: 'open' | 'closed' | 'all'): Promise<ApiPullRequestSummary[]>;
   createGitHubPullRequest(repositoryId: string, input: { title: string; head: string; base?: string; body?: string; draft?: boolean }): Promise<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>;
   listChangeRequests(): Promise<ApiChangeRequest[]>;
   createChangeRequest(title: string, description?: string): Promise<ApiChangeRequest>;
@@ -112,6 +116,8 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async createBranch(repositoryId, input) { return await request<{ repositoryId: string; branch: string; baseSha: string }>(`/v1/repositories/${pathId(repositoryId)}/branches`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async commitFile(repositoryId, input) { return await request<{ repositoryId: string; branch: string; path: string; commitSha: string }>(`/v1/repositories/${pathId(repositoryId)}/contents`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async compareBranches(repositoryId, base, head) { return await request<{ repositoryId: string; base: string; head: string; comparison: ApiBranchComparison }>(`/v1/repositories/${pathId(repositoryId)}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`); },
+    async getRepositoryFile(repositoryId, path, ref) { return (await request<ApiRepositoryFile>(`/v1/repositories/${pathId(repositoryId)}/contents?path=${encodeURIComponent(path)}${ref === undefined ? '' : `&ref=${encodeURIComponent(ref)}`}`)).file; },
+    async listPullRequests(repositoryId, state = 'open') { return (await request<{ repositoryId: string; state: string; pullRequests: ApiPullRequestSummary[] }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests?state=${encodeURIComponent(state)}`)).pullRequests; },
     async createGitHubPullRequest(repositoryId, input) { return await request<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async listChangeRequests() { return (await request<{ changeRequests: ApiChangeRequest[] }>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`)).changeRequests; },
     async createChangeRequest(title, description) { return await request<ApiChangeRequest>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, ...(description === undefined ? {} : { description }) }) }); },

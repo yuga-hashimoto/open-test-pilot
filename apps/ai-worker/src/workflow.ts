@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentRequest, AgentResult } from '@open-test-pilot/agent-protocol';
 import type { GitHubPullRequest } from '@open-test-pilot/github-adapter';
@@ -58,13 +59,25 @@ export async function executeRepairWorkflow(request: AgentRequest, dependencies:
   const workspace = await dependencies.workspace.prepare(request, dependencies.rootDirectory);
   const agent = await dependencies.worker.handleInDirectory(request, workspace);
   if (agent.status !== 'completed') return { workspace, agent };
+  const manifestPath = request.requestArtifacts?.find((path) => path.endsWith('.yaml') || path.endsWith('.yml'));
+  const manifest = agent.proposedChanges?.manifest;
+  if (manifestPath === undefined || manifest === undefined) return { workspace, agent };
+  await applyManifestProposal(workspace, manifestPath, manifest);
   const validation = await dependencies.validate(workspace, request);
   if (!validation.passed) return { workspace, agent, validation };
   const execution = await dependencies.run(workspace, request);
   if (!execution.passed) return { workspace, agent, validation, execution };
-  const manifestPath = request.requestArtifacts?.find((path) => path.endsWith('.yaml') || path.endsWith('.yml'));
-  const manifest = agent.proposedChanges?.manifest;
-  if (!policy.allowPublish || dependencies.publisher === undefined || manifest === undefined || manifestPath === undefined) return { workspace, agent, validation, execution };
+  if (!policy.allowPublish || dependencies.publisher === undefined) return { workspace, agent, validation, execution };
   const published = await publishRepairProposal(dependencies.publisher, { request, manifestPath, manifestContent: manifest, baseBranch: request.repository.branch, baseSha: request.repository.commit, title: agent.pullRequestIntent?.title ?? `Repair ${request.requestId}`, body: agent.pullRequestIntent?.description ?? 'Validated OpenTestPilot repair proposal' });
   return { workspace, agent, validation, execution, published };
+}
+
+async function applyManifestProposal(workspace: string, manifestPath: string, content: string): Promise<void> {
+  if (!manifestPath.endsWith('.yaml') && !manifestPath.endsWith('.yml')) throw new Error('repair proposal must target a YAML manifest');
+  const workspaceRoot = resolve(workspace);
+  const target = resolve(workspaceRoot, manifestPath);
+  const relativeTarget = relative(workspaceRoot, target);
+  if (relativeTarget.startsWith('..') || resolve(workspaceRoot, relativeTarget) !== target) throw new Error('repair proposal path must stay within the workspace');
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, content, 'utf8');
 }

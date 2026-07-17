@@ -119,9 +119,13 @@ export class CliAgentWorker {
   constructor(private readonly options: CliAgentWorkerOptions) { this.policy = options.policy ?? defaultWorkerPolicy; }
 
   async handle(request: AgentRequest): Promise<AgentResult> {
+    return this.handleInDirectory(request, this.options.cwd);
+  }
+
+  async handleInDirectory(request: AgentRequest, cwd: string): Promise<AgentResult> {
     try { validateWorkerRequest(request, this.policy); } catch (error) { return rejected(request, error); }
     try {
-      const result = await runCommand(this.options.command, [...this.options.args, promptFor(request)], this.options.cwd, this.options.timeoutMs ?? 300_000);
+      const result = await runCommand(this.options.command, [...this.options.args, promptFor(request)], cwd, this.options.timeoutMs ?? 300_000);
       if (this.options.strictStructuredOutput === true) return parseStructuredAgentResult(request, result.stdout);
       try { return parseStructuredAgentResult(request, result.stdout); } catch { return unstructuredResult(request, result.stdout); }
     } catch (error) {

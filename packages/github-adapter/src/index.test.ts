@@ -63,6 +63,19 @@ describe('GitHub adapter', () => {
     expect(requests).toEqual(expect.arrayContaining(['https://api.github.com/repos/org/repo/branches?per_page=100', 'https://api.github.com/repos/org/repo/compare/main...repair']));
   });
 
+  it('reads repository contents and keeps open and closed PR history distinct', async () => {
+    const requests: string[] = [];
+    const client = new GitHubApiClient('installation-token', async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/contents/tests/login.yaml')) return new Response(JSON.stringify({ path: 'tests/login.yaml', sha: 'manifest-sha', encoding: 'base64', content: Buffer.from('name: Login\n').toString('base64') }), { status: 200 });
+      return new Response(JSON.stringify([{ number: 12, html_url: 'https://github.com/org/repo/pull/12', title: 'Repair login', state: 'closed', merged_at: '2026-07-17T00:00:00Z', updated_at: '2026-07-17T00:00:00Z', head: { ref: 'repair/login' }, base: { ref: 'main' } }]), { status: 200 });
+    });
+    await expect(client.getFile('org', 'repo', 'tests/login.yaml', 'main')).resolves.toEqual({ path: 'tests/login.yaml', sha: 'manifest-sha', content: 'name: Login\n' });
+    await expect(client.listPullRequests('org', 'repo', 'all')).resolves.toEqual([{ number: 12, htmlUrl: 'https://github.com/org/repo/pull/12', title: 'Repair login', state: 'closed', head: 'repair/login', base: 'main', mergedAt: '2026-07-17T00:00:00Z', updatedAt: '2026-07-17T00:00:00Z' }]);
+    expect(requests).toEqual(expect.arrayContaining(['https://api.github.com/repos/org/repo/contents/tests/login.yaml?ref=main', 'https://api.github.com/repos/org/repo/pulls?state=all&per_page=100&page=1']));
+  });
+
   it('resolves the authenticated OAuth user without returning the OAuth token', async () => {
     const client = new GitHubApiClient('oauth-token', async (input, init) => {
       expect(String(input)).toBe('https://api.github.com/user');

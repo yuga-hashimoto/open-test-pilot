@@ -112,10 +112,11 @@ describe('executeManifest', () => {
   it('executes a registered custom action and records its output context', async () => {
     let received: Record<string, unknown> | undefined;
     let artifactId: string | undefined;
-    const result = await executeManifest({ ...manifest, id: 'custom-flow', steps: [{ id: 'custom', actions: [{ id: 'record', type: 'custom.action', actionType: 'company.record', input: { value: 'hello' } }] }] }, {
+    const result = await executeManifest({ ...manifest, id: 'custom-flow', permissions: { networkAccess: true, fileSystem: true }, steps: [{ id: 'custom', actions: [{ id: 'record', type: 'custom.action', actionType: 'company.record', input: { value: 'hello' } }] }] }, {
       outputDir: '.testpilot/custom-flow',
       customActions: {
         'company.record': {
+          permissions: { filesystem: { write: ['custom.txt'] } },
           async execute(context, input) { received = input; artifactId = await context.writeArtifact('custom.txt', new TextEncoder().encode('custom artifact'), 'text/plain'); return { recorded: true }; },
         },
       },
@@ -125,6 +126,58 @@ describe('executeManifest', () => {
     expect(artifactId).toBeDefined();
     expect(await readFile('.testpilot/custom-flow/custom.txt', 'utf8')).toBe('custom artifact');
     expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'custom', path: 'custom.txt' })]));
+  });
+
+  it('enforces custom action network, filesystem, and secret permissions', async () => {
+    const action = {
+      permissions: { network: ['api.example.test'], filesystem: { write: ['allowed.txt'] }, secrets: ['API_TOKEN'] },
+      async execute(context: { getSecret(name: string): Promise<string | undefined>; writeArtifact(name: string, body: Uint8Array, contentType: string): Promise<string> }) {
+        expect(await context.getSecret('API_TOKEN')).toBe('token');
+        await context.writeArtifact('allowed.txt', new TextEncoder().encode('ok'), 'text/plain');
+        return { ok: true };
+      },
+    };
+    const manifestWithPermission = {
+      ...manifest,
+      id: 'custom-permissions',
+      permissions: { networkAccess: true, fileSystem: true },
+      secrets: [{ name: 'API_TOKEN', provider: 'env', reference: 'API_TOKEN' }],
+      steps: [{ id: 'custom', actions: [{ id: 'permitted', type: 'custom.action', actionType: 'company.secure', input: {} }] }],
+    } as Manifest;
+    const result = await executeManifest(manifestWithPermission, {
+      outputDir: '.testpilot/custom-permissions',
+      secretProviders: { env: { async get() { return 'token'; } } },
+      customActions: { 'company.secure': action },
+    });
+    expect(result.status).toBe('passed');
+
+    const denied = await executeManifest({ ...manifestWithPermission, id: 'custom-permissions-denied', permissions: { networkAccess: false, fileSystem: false } }, {
+      outputDir: '.testpilot/custom-permissions-denied',
+      secretProviders: { env: { async get() { return 'token'; } } },
+      customActions: { 'company.secure': action },
+    });
+    expect(denied.status).toBe('failed');
+    expect(denied.steps[0]?.actions[0]?.error?.message).toMatch(/network permission/);
+  });
+
+  it('redacts resolved secret values from returned run evidence', async () => {
+    const result = await executeManifest({
+      ...manifest,
+      id: 'custom-secret-redaction',
+      secrets: [{ name: 'API_TOKEN', provider: 'env', reference: 'API_TOKEN' }],
+      steps: [{ id: 'custom', actions: [{ id: 'leak', type: 'custom.action', actionType: 'company.leak', input: {} }] }],
+    }, {
+      outputDir: '.testpilot/custom-secret-redaction',
+      secretProviders: { env: { async get() { return 'super-secret-token'; } } },
+      customActions: {
+        'company.leak': {
+          permissions: { secrets: ['API_TOKEN'] },
+          async execute(context) { throw new Error(await context.getSecret('API_TOKEN')); },
+        },
+      },
+    });
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]?.actions[0]?.error?.message).toBe('[REDACTED]');
   });
 
   it('resolves Manifest secret references through the configured provider at execution time', async () => {

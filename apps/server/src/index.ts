@@ -539,6 +539,8 @@ interface CompleteAiWorkerJobBody { status: 'completed' | 'failed' | 'cancelled'
 interface CreateSecretBody { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }
 interface RotateSecretBody { value: string }
 interface CompareBranchesQuery { base?: string; head?: string }
+interface RepositoryContentQuery { path?: string; ref?: string }
+interface PullRequestHistoryQuery { state?: 'open' | 'closed' | 'all' }
 interface CreateTestBody { projectId: string; name: string; manifestId: string; manifest?: unknown }
 interface CreateRunBody { projectId: string; testId: string; priority?: number; requiredLabels?: string[] }
 interface TenantHeaders { 'x-organization-id'?: string }
@@ -872,6 +874,27 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     }
   });
 
+  app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders; Querystring: RepositoryContentQuery }>('/v1/repositories/:repositoryId/contents', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support contents' });
+    if (typeof request.query.path !== 'string' || request.query.path.trim() === '') return reply.code(400).send({ error: 'path is required' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App contents are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const file = await new GitHubApiClient(installationToken.token).getFile(record.owner, record.name, request.query.path.trim(), request.query.ref?.trim() || record.defaultBranch);
+      return reply.send({ repositoryId: record.id, file });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders; Querystring: CompareBranchesQuery }>('/v1/repositories/:repositoryId/compare', async (request, reply) => {
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
@@ -934,6 +957,28 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
       const commit = await new GitHubApiClient(installationToken.token).commitFile(record.owner, record.name, { branch: body.branch.trim(), path: body.path.trim(), content: body.content, message: body.message.trim(), ...(body.sha === undefined ? {} : { sha: body.sha }) });
       await repository.recordAuditEvent(organizationId, 'github.commit_created', 'repository', record.id, { branch: body.branch.trim(), path: body.path.trim(), commitSha: commit.commitSha });
       return reply.code(201).send({ repositoryId: record.id, path: body.path.trim(), branch: body.branch.trim(), commitSha: commit.commitSha });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders; Querystring: PullRequestHistoryQuery }>('/v1/repositories/:repositoryId/pull-requests', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support pull requests' });
+    const state = request.query.state ?? 'open';
+    if (!['open', 'closed', 'all'].includes(state)) return reply.code(400).send({ error: 'state must be open, closed, or all' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App pull request history is not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const pullRequests = await new GitHubApiClient(installationToken.token).listPullRequests(record.owner, record.name, state);
+      return reply.send({ repositoryId: record.id, state, pullRequests });
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -1367,8 +1412,8 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/repositories/{repositoryId}/sync': { post: {} },
     '/v1/repositories/{repositoryId}/compare': { get: {} },
     '/v1/repositories/{repositoryId}/branches': { get: {}, post: {} },
-    '/v1/repositories/{repositoryId}/contents': { put: {} },
-    '/v1/repositories/{repositoryId}/pull-requests': { post: {} },
+    '/v1/repositories/{repositoryId}/contents': { get: {}, put: {} },
+    '/v1/repositories/{repositoryId}/pull-requests': { get: {}, post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },
     '/v1/tests/{id}/manifest': { get: {}, put: {} },
