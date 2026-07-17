@@ -64,11 +64,19 @@ export interface ManifestSecretRef {
 export interface ManifestMobileCapabilities {
   platform: 'android' | 'ios';
   deviceName: string;
+  udid?: string;
   platformVersion?: string;
   app?: string;
+  bundleId?: string;
   appPackage?: string;
   appActivity?: string;
   automationName?: 'UiAutomator2' | 'XCUITest';
+  wdaLocalPort?: number;
+  useNewWDA?: boolean;
+  wdaLaunchTimeout?: number;
+  wdaConnectionTimeout?: number;
+  showXcodeLog?: boolean;
+  noReset?: boolean;
   serverUrl?: string;
 }
 
@@ -327,11 +335,19 @@ export const manifestJsonSchema = {
           properties: {
             platform: { enum: ['android', 'ios'] },
             deviceName: { type: 'string' },
+            udid: { type: 'string' },
             platformVersion: { type: 'string' },
             app: { type: 'string' },
+            bundleId: { type: 'string' },
             appPackage: { type: 'string' },
             appActivity: { type: 'string' },
             automationName: { enum: ['UiAutomator2', 'XCUITest'] },
+            wdaLocalPort: { type: 'integer', minimum: 1, maximum: 65535 },
+            useNewWDA: { type: 'boolean' },
+            wdaLaunchTimeout: { type: 'integer', minimum: 1 },
+            wdaConnectionTimeout: { type: 'integer', minimum: 1 },
+            showXcodeLog: { type: 'boolean' },
+            noReset: { type: 'boolean' },
             serverUrl: { type: 'string', pattern: '^https?://[^\\s]+$' },
           },
           additionalProperties: false,

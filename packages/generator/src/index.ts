@@ -34,11 +34,19 @@ function mobileCapabilitiesLiteral(capabilities: ManifestMobileCapabilities): st
     `platformName: ${quote(capabilities.platform)}`,
     `'appium:deviceName': ${quote(capabilities.deviceName)}`,
   ];
+  if (capabilities.udid !== undefined) entries.push(`'appium:udid': ${quote(capabilities.udid)}`);
   if (capabilities.platformVersion !== undefined) entries.push(`'appium:platformVersion': ${quote(capabilities.platformVersion)}`);
   if (capabilities.app !== undefined) entries.push(`'appium:app': ${quote(capabilities.app)}`);
+  if (capabilities.bundleId !== undefined) entries.push(`'appium:bundleId': ${quote(capabilities.bundleId)}`);
   if (capabilities.appPackage !== undefined) entries.push(`'appium:appPackage': ${quote(capabilities.appPackage)}`);
   if (capabilities.appActivity !== undefined) entries.push(`'appium:appActivity': ${quote(capabilities.appActivity)}`);
   entries.push(`'appium:automationName': ${quote(capabilities.automationName ?? (capabilities.platform === 'android' ? 'UiAutomator2' : 'XCUITest'))}`);
+  if (capabilities.wdaLocalPort !== undefined) entries.push(`'appium:wdaLocalPort': ${capabilities.wdaLocalPort}`);
+  if (capabilities.useNewWDA !== undefined) entries.push(`'appium:useNewWDA': ${capabilities.useNewWDA}`);
+  if (capabilities.wdaLaunchTimeout !== undefined) entries.push(`'appium:wdaLaunchTimeout': ${capabilities.wdaLaunchTimeout}`);
+  if (capabilities.wdaConnectionTimeout !== undefined) entries.push(`'appium:wdaConnectionTimeout': ${capabilities.wdaConnectionTimeout}`);
+  if (capabilities.showXcodeLog !== undefined) entries.push(`'appium:showXcodeLog': ${capabilities.showXcodeLog}`);
+  if (capabilities.noReset !== undefined) entries.push(`'appium:noReset': ${capabilities.noReset}`);
   return `{ ${entries.join(', ')} }`;
 }
 

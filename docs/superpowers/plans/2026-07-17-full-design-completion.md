@@ -101,6 +101,7 @@
 - [x] Run the real team PostgreSQL/Redis/MinIO scenario; complete the GitHub App write scenario when external credentials are available.
 - [x] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
 - [x] Run Android Appium; attempt iOS Appium/XCUITest on an iOS 26.4 simulator and record the WDA runtime startup timeout after a successful Xcode build as an environment gate.
+- [x] Declare the XCUITest driver and forward iOS device/bundle/WDA capabilities through the adapter; rerun the real iOS session and record the remaining WDA startup gate.
 - [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
 - [x] Complete the requirement-by-requirement audit; the remaining unchecked items are external capability gates listed above.
 

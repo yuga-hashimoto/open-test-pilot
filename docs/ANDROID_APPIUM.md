@@ -1,6 +1,6 @@
 # Android Appium execution
 
-The mobile path is now wired from a Manifest through generated WebdriverIO code and the Local Runner into Appium.
+The mobile path is wired from a Manifest through generated WebdriverIO code and the Local Runner into Appium. The adapter includes both the UiAutomator2 and XCUITest drivers; iOS-specific `udid`, `bundleId`, and WebDriverAgent capabilities are forwarded unchanged.
 
 ## Local execution
 
@@ -50,5 +50,4 @@ execution containing `mobile.launch`, `mobile.expectText`, and
 produced a 1080x2400 PNG screenshot, page source XML, current activity, and
 logcat evidence under `packages/appium-adapter/.testpilot/mobile-integration/`.
 
-iOS remains a protocol/code-generation path until an XCUITest simulator or
-device is available.
+The Android gate is independent of the iOS host gate. See `docs/IOS_APPIUM.md` for the XCUITest command and the current WDA evidence.

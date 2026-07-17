@@ -36,3 +36,33 @@ describe.skipIf(process.env['OPENTESTPILOT_MOBILE_E2E'] !== 'true')('Appium Andr
     expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'mobile-screenshot' })]));
   }, 60_000);
 });
+
+describe.skipIf(process.env['OPENTESTPILOT_IOS_E2E'] !== 'true')('Appium iOS integration', () => {
+  it('executes an iOS Manifest and captures a real step screenshot', async () => {
+    const capabilities = {
+      platform: 'ios' as const,
+      deviceName: process.env['OPENTESTPILOT_IOS_DEVICE'] ?? 'iPhone 16',
+      ...(process.env['OPENTESTPILOT_IOS_UDID'] === undefined ? {} : { udid: process.env['OPENTESTPILOT_IOS_UDID'] }),
+      bundleId: process.env['OPENTESTPILOT_IOS_BUNDLE_ID'] ?? 'com.apple.Preferences',
+      ...(process.env['OPENTESTPILOT_IOS_WDA_PORT'] === undefined ? {} : { wdaLocalPort: Number(process.env['OPENTESTPILOT_IOS_WDA_PORT']) }),
+      ...(process.env['OPENTESTPILOT_IOS_APPIUM_URL'] === undefined ? {} : { serverUrl: process.env['OPENTESTPILOT_IOS_APPIUM_URL'] }),
+      useNewWDA: process.env['OPENTESTPILOT_IOS_USE_NEW_WDA'] !== 'false',
+      wdaLaunchTimeout: Number(process.env['OPENTESTPILOT_IOS_WDA_LAUNCH_TIMEOUT'] ?? 120000),
+      wdaConnectionTimeout: Number(process.env['OPENTESTPILOT_IOS_WDA_CONNECTION_TIMEOUT'] ?? 120000),
+      showXcodeLog: process.env['OPENTESTPILOT_IOS_SHOW_XCODE_LOG'] !== 'false',
+      noReset: process.env['OPENTESTPILOT_IOS_NO_RESET'] !== 'false',
+    };
+    const selector = process.env['OPENTESTPILOT_IOS_SELECTOR'] ?? '//XCUIElementTypeApplication[@name="Settings"]';
+    const result = await executeMobileManifest(capabilities, {
+      id: 'ios-settings-manifest',
+      steps: [{ id: 'settings', actions: [
+        { id: 'launch', type: 'mobile.launch', capabilities },
+        { id: 'assert-app', type: 'mobile.expectVisible', selector },
+        { id: 'screenshot', type: 'mobile.screenshot', name: 'ios-settings' },
+      ] }],
+    }, { evidenceDir: '.testpilot/ios-mobile-integration' });
+    expect(result.status).toBe('passed');
+    expect(result.steps[0]?.actions.map((action) => action.actionId)).toEqual(['launch', 'assert-app', 'screenshot']);
+    expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'mobile-screenshot' })]));
+  }, 180_000);
+});

@@ -39,7 +39,7 @@ describe('Manifest Schema', () => {
       schemaVersion: '1.0.0', id: 'mobile-login', name: 'Mobile login', description: '', type: 'mobile',
       tags: [], priority: 'normal', preconditions: [], variables: [], secrets: [], setup: [],
       steps: [{ id: 'open-app', actions: [
-        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554', appPackage: 'com.example', appActivity: '.MainActivity' } },
+        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'ios', deviceName: 'iPhone 16', udid: 'simulator-1', bundleId: 'com.example.app', wdaLocalPort: 8102, useNewWDA: true, wdaLaunchTimeout: 120000, wdaConnectionTimeout: 120000, showXcodeLog: true, noReset: true } },
         { id: 'tap-login', type: 'mobile.tap', selector: 'id=com.example:id/login' },
         { id: 'fill-email', type: 'mobile.fill', selector: 'id=com.example:id/email', value: 'user@example.com' },
         { id: 'assert-welcome', type: 'mobile.expectText', selector: 'id=com.example:id/welcome', expectedText: 'Welcome' },

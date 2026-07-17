@@ -8,11 +8,19 @@ export type MobilePlatform = 'android' | 'ios';
 export interface MobileCapabilities {
   platform: MobilePlatform;
   deviceName: string;
+  udid?: string;
   platformVersion?: string;
   app?: string;
+  bundleId?: string;
   appPackage?: string;
   appActivity?: string;
   automationName?: 'UiAutomator2' | 'XCUITest';
+  wdaLocalPort?: number;
+  useNewWDA?: boolean;
+  wdaLaunchTimeout?: number;
+  wdaConnectionTimeout?: number;
+  showXcodeLog?: boolean;
+  noReset?: boolean;
   serverUrl?: string;
 }
 
@@ -20,10 +28,10 @@ export interface MobileNode { id?: string | undefined; text?: string | undefined
 
 export interface LocatorCandidate { strategy: 'accessibility id' | 'id' | '-ios predicate string' | 'xpath'; value: string; confidence: number; source: string; }
 
-export function buildAppiumCapabilities(input: MobileCapabilities): Record<string, string> {
+export function buildAppiumCapabilities(input: MobileCapabilities): Record<string, string | number | boolean> {
   if (input.deviceName.trim().length === 0) throw new Error('deviceName is required');
   const defaults = input.platform === 'android' ? { automationName: 'UiAutomator2' } : { automationName: 'XCUITest' };
-  return { platformName: input.platform, 'appium:deviceName': input.deviceName, ...(input.platformVersion === undefined ? {} : { 'appium:platformVersion': input.platformVersion }), ...(input.app === undefined ? {} : { 'appium:app': input.app }), ...(input.appPackage === undefined ? {} : { 'appium:appPackage': input.appPackage }), ...(input.appActivity === undefined ? {} : { 'appium:appActivity': input.appActivity }), 'appium:automationName': input.automationName ?? defaults.automationName };
+  return { platformName: input.platform, 'appium:deviceName': input.deviceName, ...(input.udid === undefined ? {} : { 'appium:udid': input.udid }), ...(input.platformVersion === undefined ? {} : { 'appium:platformVersion': input.platformVersion }), ...(input.app === undefined ? {} : { 'appium:app': input.app }), ...(input.bundleId === undefined ? {} : { 'appium:bundleId': input.bundleId }), ...(input.appPackage === undefined ? {} : { 'appium:appPackage': input.appPackage }), ...(input.appActivity === undefined ? {} : { 'appium:appActivity': input.appActivity }), 'appium:automationName': input.automationName ?? defaults.automationName, ...(input.wdaLocalPort === undefined ? {} : { 'appium:wdaLocalPort': input.wdaLocalPort }), ...(input.useNewWDA === undefined ? {} : { 'appium:useNewWDA': input.useNewWDA }), ...(input.wdaLaunchTimeout === undefined ? {} : { 'appium:wdaLaunchTimeout': input.wdaLaunchTimeout }), ...(input.wdaConnectionTimeout === undefined ? {} : { 'appium:wdaConnectionTimeout': input.wdaConnectionTimeout }), ...(input.showXcodeLog === undefined ? {} : { 'appium:showXcodeLog': input.showXcodeLog }), ...(input.noReset === undefined ? {} : { 'appium:noReset': input.noReset }) };
 }
 
 export function parseAndroidUiDump(xml: string): MobileNode[] {

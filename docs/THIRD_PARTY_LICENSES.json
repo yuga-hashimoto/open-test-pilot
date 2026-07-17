@@ -33,6 +33,11 @@
     },
     {
       "license": "Apache-2.0",
+      "name": "@appium/strongbox",
+      "version": "1.1.2"
+    },
+    {
+      "license": "Apache-2.0",
       "name": "@appium/support",
       "version": "7.2.5"
     },
@@ -718,6 +723,31 @@
     },
     {
       "license": "Apache-2.0",
+      "name": "appium-ios-device",
+      "version": "3.1.18"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-ios-remotexpc",
+      "version": "5.11.0"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-ios-simulator",
+      "version": "8.2.8"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-ios-tuntap",
+      "version": "1.1.0"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-remote-debugger",
+      "version": "15.10.9"
+    },
+    {
+      "license": "Apache-2.0",
       "name": "appium-uiautomator2-driver",
       "version": "8.1.0"
     },
@@ -725,6 +755,21 @@
       "license": "Apache-2.0",
       "name": "appium-uiautomator2-server",
       "version": "10.3.2"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-webdriveragent",
+      "version": "15.1.6"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-xcode",
+      "version": "6.2.6"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "appium-xcuitest-driver",
+      "version": "11.17.7"
     },
     {
       "license": "Apache-2.0",
@@ -1054,6 +1099,11 @@
     {
       "license": "MIT",
       "name": "commander",
+      "version": "14.0.3"
+    },
+    {
+      "license": "MIT",
+      "name": "commander",
       "version": "9.5.0"
     },
     {
@@ -1355,6 +1405,11 @@
       "license": "BSD-2-Clause",
       "name": "entities",
       "version": "7.0.1"
+    },
+    {
+      "license": "MIT",
+      "name": "env-paths",
+      "version": "4.0.0"
     },
     {
       "license": "MIT",
@@ -1838,6 +1893,11 @@
     },
     {
       "license": "MIT",
+      "name": "is-safe-filename",
+      "version": "0.1.1"
+    },
+    {
+      "license": "MIT",
       "name": "is-stream",
       "version": "2.0.1"
     },
@@ -1874,6 +1934,11 @@
     {
       "license": "BlueOak-1.0.0",
       "name": "isexe",
+      "version": "3.1.5"
+    },
+    {
+      "license": "BlueOak-1.0.0",
+      "name": "isexe",
       "version": "4.0.0"
     },
     {
@@ -1893,6 +1958,11 @@
     },
     {
       "license": "MIT",
+      "name": "js2xmlparser2",
+      "version": "0.2.0"
+    },
+    {
+      "license": "MIT",
       "name": "jsesc",
       "version": "3.1.0"
     },
@@ -1900,6 +1970,11 @@
       "license": "MIT",
       "name": "jsftp",
       "version": "2.1.3"
+    },
+    {
+      "license": "MIT",
+      "name": "json-parse-even-better-errors",
+      "version": "4.0.0"
     },
     {
       "license": "MIT",
@@ -2063,6 +2138,11 @@
     },
     {
       "license": "MIT",
+      "name": "memorystream",
+      "version": "0.3.1"
+    },
+    {
+      "license": "MIT",
       "name": "merge-descriptors",
       "version": "2.0.0"
     },
@@ -2178,8 +2258,28 @@
     },
     {
       "license": "MIT",
+      "name": "node-addon-api",
+      "version": "8.9.0"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "node-devicectl",
+      "version": "1.4.3"
+    },
+    {
+      "license": "MIT",
+      "name": "node-gyp-build",
+      "version": "4.8.4"
+    },
+    {
+      "license": "MIT",
       "name": "node-releases",
       "version": "2.0.51"
+    },
+    {
+      "license": "Apache-2.0",
+      "name": "node-simctl",
+      "version": "8.2.9"
     },
     {
       "license": "BSD-2-Clause",
@@ -2190,6 +2290,16 @@
       "license": "MIT",
       "name": "normalize-path",
       "version": "3.0.0"
+    },
+    {
+      "license": "ISC",
+      "name": "npm-normalize-package-bin",
+      "version": "4.0.0"
+    },
+    {
+      "license": "MIT",
+      "name": "npm-run-all2",
+      "version": "8.0.4"
     },
     {
       "license": "BSD-2-Clause",
@@ -2388,6 +2498,11 @@
     },
     {
       "license": "MIT",
+      "name": "pidtree",
+      "version": "0.6.1"
+    },
+    {
+      "license": "MIT",
       "name": "pino-abstract-transport",
       "version": "3.0.0"
     },
@@ -2542,6 +2657,11 @@
       "version": "19.2.7"
     },
     {
+      "license": "ISC",
+      "name": "read-package-json-fast",
+      "version": "4.0.0"
+    },
+    {
       "license": "MIT",
       "name": "readable-stream",
       "version": "1.1.14"
@@ -2625,6 +2745,11 @@
       "license": "MIT",
       "name": "rgb2hex",
       "version": "0.2.5"
+    },
+    {
+      "license": "BlueOak-1.0.0",
+      "name": "rimraf",
+      "version": "6.1.3"
     },
     {
       "license": "MIT",
@@ -3082,6 +3207,11 @@
       "version": "5.9.3"
     },
     {
+      "license": "Apache-2.0",
+      "name": "typescript",
+      "version": "6.0.3"
+    },
+    {
       "license": "MIT",
       "name": "undici-types",
       "version": "6.21.0"
@@ -3200,6 +3330,11 @@
       "license": "ISC",
       "name": "which",
       "version": "2.0.2"
+    },
+    {
+      "license": "ISC",
+      "name": "which",
+      "version": "5.0.0"
     },
     {
       "license": "ISC",

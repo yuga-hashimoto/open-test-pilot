@@ -163,7 +163,7 @@ describe('generateMobileAppium', () => {
     const output = generateMobileAppium({
       schemaVersion: '1.0.0', id: 'android-login', name: 'Android login', description: '', type: 'mobile', tags: [], priority: 'normal',
       preconditions: [], variables: [], secrets: [], setup: [], steps: [{ id: 'login', actions: [
-        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554', appPackage: 'com.example', appActivity: '.MainActivity' } },
+        { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'ios', deviceName: 'iPhone 16', udid: 'simulator-1', bundleId: 'com.example.app', wdaLocalPort: 8102, useNewWDA: true, wdaLaunchTimeout: 120000, wdaConnectionTimeout: 120000, showXcodeLog: true, noReset: true } },
         { id: 'tap', type: 'mobile.tap', selector: 'id=com.example:id/login' },
         { id: 'fill', type: 'mobile.fill', selector: 'id=com.example:id/email', value: 'user@example.com' },
         { id: 'assert', type: 'mobile.expectText', selector: 'id=com.example:id/welcome', expectedText: 'Welcome' },
@@ -173,7 +173,10 @@ describe('generateMobileAppium', () => {
       source: { repository: 'local', path: 'mobile.yaml' }, generatedCode: { path: 'generated/android-login.spec.ts' },
     });
     expect(output.code).toContain("import { remote } from 'webdriverio';");
-    expect(output.code).toContain("'appium:deviceName': 'emulator-5554'");
+    expect(output.code).toContain("'appium:deviceName': 'iPhone 16'");
+    expect(output.code).toContain("'appium:udid': 'simulator-1'");
+    expect(output.code).toContain("'appium:bundleId': 'com.example.app'");
+    expect(output.code).toContain("'appium:wdaLocalPort': 8102");
     expect(output.code).toContain("await (await browser.$('id=com.example:id/login')).click();");
     expect(output.code).toContain("await browser.saveScreenshot('artifacts/welcome.png');");
     expect(output.code).toContain('deleteSession');

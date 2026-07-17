@@ -11,6 +11,21 @@ describe('Appium adapter', () => {
     expect(locatorCandidates(nodes[0] ?? {}, 'android')[0]).toMatchObject({ strategy: 'id', value: 'com.example:id/login' });
   });
 
+  it('forwards iOS device, bundle, and WebDriverAgent capabilities', () => {
+    expect(buildAppiumCapabilities({ platform: 'ios', deviceName: 'iPhone 16', udid: 'simulator-1', bundleId: 'com.example.app', wdaLocalPort: 8102, useNewWDA: true, wdaLaunchTimeout: 120000, wdaConnectionTimeout: 120000, showXcodeLog: true, noReset: true })).toMatchObject({
+      platformName: 'ios',
+      'appium:udid': 'simulator-1',
+      'appium:bundleId': 'com.example.app',
+      'appium:automationName': 'XCUITest',
+      'appium:wdaLocalPort': 8102,
+      'appium:useNewWDA': true,
+      'appium:wdaLaunchTimeout': 120000,
+      'appium:wdaConnectionTimeout': 120000,
+      'appium:showXcodeLog': true,
+      'appium:noReset': true,
+    });
+  });
+
   it('parses iOS accessibility evidence and generates independently runnable code', () => {
     const nodes = parseIosAccessibilityJson([{ identifier: 'email', label: 'Email', type: 'XCUIElementTypeTextField' }]);
     expect(locatorCandidates(nodes[0] ?? {}, 'ios')[0]?.value).toBe('email');
