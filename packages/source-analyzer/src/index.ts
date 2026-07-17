@@ -1,4 +1,5 @@
 import type { Finding } from '@open-test-pilot/agent-protocol';
+import { DefaultManifestSchemaVersion, type Manifest, type ManifestAction } from '@open-test-pilot/manifest-schema';
 
 export type SourcePlatform = 'web' | 'android' | 'flutter' | 'ios';
 export type SourceFramework = 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'android' | 'flutter' | 'ios';
@@ -72,4 +73,86 @@ export function analyzeSource(file: SourceFile, registry: ReadonlyMap<SourceFram
   const plugin = file.framework === undefined ? undefined : registry.get(file.framework);
   if (plugin !== undefined) findings.push(...plugin.detect(file));
   return findings;
+}
+
+export interface ManifestGenerationOptions {
+  repository?: string;
+  baseUrl?: string;
+  generatedCodePath?: string;
+  id?: string;
+  name?: string;
+  type?: string;
+}
+
+export interface GeneratedManifest {
+  manifest: Manifest;
+  findings: Finding[];
+}
+
+function slug(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'source-test';
+}
+
+function sourceRoute(file: SourceFile, line: string): string {
+  const match = line.match(/(?:app|router)\.(?:get|post|put|delete)\s*\(\s*["'`]([^"'`]+)["'`]/i);
+  if (match?.[1] !== undefined) return match[1];
+  const nextPath = file.path.replace(/^.*?(?:app|pages)\//, '/').replace(/\.(?:tsx?|jsx?)$/, '').replace(/\/page$/, '') || '/';
+  return nextPath.startsWith('/') ? nextPath : `/${nextPath}`;
+}
+
+function locatorFromLine(line: string): string {
+  const testId = line.match(/data-testid\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (testId !== undefined) return `[data-testid="${testId}"]`;
+  const aria = line.match(/aria-label\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (aria !== undefined) return `[aria-label="${aria}"]`;
+  if (/<button\b/i.test(line)) return 'button';
+  if (/<input\b/i.test(line)) return 'input';
+  return 'form';
+}
+
+function actionForFinding(finding: Finding, file: SourceFile, options: Required<Pick<ManifestGenerationOptions, 'baseUrl'>>): ManifestAction {
+  const line = file.content.split('\n')[Math.max(0, (finding.source.line ?? 1) - 1)] ?? '';
+  const id = `${slug(finding.type)}-${finding.source.line ?? 1}`;
+  if (finding.type === 'api-route' || finding.type === 'nextjs-route' || finding.type === 'react-router-route' || finding.type === 'remix-route') {
+    const method = line.match(/\.(get|post|put|delete)\s*\(/i)?.[1]?.toUpperCase() ?? 'GET';
+    return { id, type: 'api.request', method, url: `${options.baseUrl}${sourceRoute(file, line)}`, expectedStatus: [200, 201, 204] };
+  }
+  if (finding.type === 'form-control' || finding.type === 'stable-locator') {
+    return { id, type: 'web.expectVisible', selector: locatorFromLine(line) };
+  }
+  if (finding.type.startsWith('android-') || finding.type.startsWith('flutter-') || finding.type.startsWith('ios-')) {
+    return { id, type: 'web.screenshot', name: id };
+  }
+  return { id, type: 'web.expectVisible', selector: 'body' };
+}
+
+export function generateManifestFromSource(file: SourceFile, options: ManifestGenerationOptions = {}): GeneratedManifest {
+  const findings = analyzeSource(file);
+  const id = options.id ?? slug(file.path);
+  const baseUrl = options.baseUrl ?? '${env.BASE_URL}';
+  const candidates = findings.filter((item) => item.severity !== 'error');
+  const actions = candidates.map((item) => actionForFinding(item, file, { baseUrl }));
+  const uniqueActions = actions.filter((action, index) => actions.findIndex((candidate) => candidate.id === action.id) === index);
+  const steps = [{ id: 'source-surfaces', title: 'Exercise analyzed source surfaces', actions: uniqueActions.length > 0 ? uniqueActions : [{ id: 'source-screenshot', type: 'web.screenshot', name: 'source-surface' }] }];
+  const manifest: Manifest = {
+    schemaVersion: DefaultManifestSchemaVersion,
+    id,
+    name: options.name ?? `Generated ${file.path}`,
+    description: `Generated from source analysis of ${file.path}`,
+    type: options.type ?? (file.platform === 'web' ? 'web' : file.platform),
+    tags: ['generated', 'source-first'],
+    priority: 'normal',
+    preconditions: [],
+    variables: [],
+    secrets: [],
+    setup: [{ id: 'open-base-url', actions: [{ id: 'goto-base-url', type: 'web.goto', url: baseUrl }] }],
+    steps,
+    cleanup: [],
+    artifacts: { screenshots: 'after', traces: true },
+    runner: { minBrowsers: file.platform === 'web' ? ['chromium'] : [] },
+    permissions: { networkAccess: true },
+    source: { repository: options.repository ?? 'local', path: file.path },
+    generatedCode: { path: options.generatedCodePath ?? `generated/${id}.spec.ts` },
+  };
+  return { manifest, findings };
 }

@@ -6,5 +6,8 @@
   "main": "./src/index.ts",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "lint": "tsc --noEmit --pretty false", "typecheck": "tsc --build", "test": "vitest run", "build": "tsc --build" },
-  "dependencies": { "@open-test-pilot/agent-protocol": "workspace:*" }
+  "dependencies": {
+    "@open-test-pilot/agent-protocol": "workspace:*",
+    "@open-test-pilot/manifest-schema": "workspace:*"
+  }
 }

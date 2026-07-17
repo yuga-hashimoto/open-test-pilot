@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeSource, createSourceAnalyzerRegistry, listSourceAnalyzerPlugins } from './index.js';
+import { analyzeSource, createSourceAnalyzerRegistry, generateManifestFromSource, listSourceAnalyzerPlugins } from './index.js';
 
 describe('source analyzer', () => {
   it('normalizes web route, form, and locator findings with source lines', () => {
@@ -19,5 +19,14 @@ describe('source analyzer', () => {
     expect(() => createSourceAnalyzerRegistry([{ id: 'javascript', platform: 'web', detect: () => [] }, { id: 'javascript', platform: 'web', detect: () => [] }])).toThrow(/already registered/);
     expect(analyzeSource({ path: 'app/page.tsx', platform: 'web', framework: 'javascript', content: 'const route = true;' }, registry).some((item) => item.type === 'custom')).toBe(true);
     expect(analyzeSource({ path: 'app/page.tsx', platform: 'web', framework: 'nextjs', content: 'export async function GET() {}' }).some((item) => item.type === 'nextjs-route')).toBe(true);
+  });
+  it('generates a schema-valid executable Manifest from analyzed source', async () => {
+    const file = { path: 'app/login/page.tsx', platform: 'web' as const, framework: 'nextjs' as const, content: 'export async function GET() { return Response.json({ ok: true }); }\n<form><button aria-label="Sign in" /></form>' };
+    const generated = generateManifestFromSource(file, { baseUrl: 'http://127.0.0.1:4173', repository: 'https://github.com/example/app' });
+    expect(generated.findings.map((item) => item.type)).toEqual(expect.arrayContaining(['nextjs-route', 'form-control']));
+    const { createManifestValidator } = await import('@open-test-pilot/manifest-schema');
+    expect(createManifestValidator()(generated.manifest).valid).toBe(true);
+    expect(generated.manifest.setup[0]?.actions[0]?.type).toBe('web.goto');
+    expect(generated.manifest.steps[0]?.actions.some((action) => action.type === 'api.request')).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import { diffManifests, migrateManifest, previewMigration } from '@open-test-pil
 import { parseManifest } from '@open-test-pilot/manifest-parser';
 import { renderReport } from '@open-test-pilot/report';
 import type { TestRunResult } from '@open-test-pilot/result-schema';
+import { generateManifestFromSource, type ManifestGenerationOptions } from '@open-test-pilot/source-analyzer';
 
 export async function runCli(args: string[], output: string[] = []): Promise<number> {
   const [group, command, input, ...rest] = args;
@@ -59,6 +60,37 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     return 0;
   }
 
+  if (group === 'source' && command === 'analyze' && input !== undefined) {
+    const source = await readFile(input, 'utf8');
+    const flags = new Map<string, string>();
+    for (let index = 0; index < rest.length; index += 1) {
+      const flag = rest[index];
+      const value = rest[index + 1];
+      if (flag?.startsWith('--') && value !== undefined && !value.startsWith('--')) flags.set(flag.slice(2), value);
+    }
+    const platform = (flags.get('platform') ?? 'web') as 'web' | 'android' | 'flutter' | 'ios';
+    const framework = flags.get('framework') as 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'android' | 'flutter' | 'ios' | undefined;
+    const generationOptions: ManifestGenerationOptions = {};
+    const repository = flags.get('repository');
+    const baseUrl = flags.get('base-url');
+    const id = flags.get('id');
+    const name = flags.get('name');
+    const generatedCodePath = flags.get('generated-code');
+    if (repository !== undefined) generationOptions.repository = repository;
+    if (baseUrl !== undefined) generationOptions.baseUrl = baseUrl;
+    if (id !== undefined) generationOptions.id = id;
+    if (name !== undefined) generationOptions.name = name;
+    if (generatedCodePath !== undefined) generationOptions.generatedCodePath = generatedCodePath;
+    const generated = generateManifestFromSource({ path: input, content: source, platform, ...(framework === undefined ? {} : { framework }) }, generationOptions);
+    const destination = flags.get('output') ?? `${input}.manifest.yaml`;
+    await mkdir(dirname(resolve(destination)), { recursive: true });
+    await writeFile(destination, stringifyYaml(generated.manifest), 'utf8');
+    output.push(`analyzed: ${input}`);
+    output.push(`findings: ${generated.findings.length}`);
+    output.push(`manifest: ${destination}`);
+    return 0;
+  }
+
   if (group === 'run' && command !== undefined) {
     const source = await readFile(command, 'utf8');
     const parsed = parseManifest(source, command);
@@ -93,7 +125,7 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     return 0;
   }
 
-  output.push('Usage: testpilot manifest validate <file> | manifest generate <file> | manifest migrate <file> [--approve] | manifest diff <before> <after> | run <file> [--actions <module>] | report <report.json>');
+  output.push('Usage: testpilot source analyze <source> [--output <manifest.yaml>] | manifest validate <file> | manifest generate <file> | manifest migrate <file> [--approve] | manifest diff <before> <after> | run <file> [--actions <module>] | report <report.json>');
   return 2;
 }
 

@@ -152,6 +152,9 @@ describe('OpenTestPilot server API', () => {
     });
     expect(runner.statusCode).toBe(201);
     const runnerId = runner.json<{ runnerId: string }>().runnerId;
+    const listedRunners = await app.inject({ method: 'GET', url: `/v1/organizations/${firstOrg}/runners`, headers: { 'x-organization-id': firstOrg } });
+    expect(listedRunners.statusCode).toBe(200);
+    expect(listedRunners.json<{ runners: Array<{ runnerId: string; organizationId: string }> }>().runners).toEqual([expect.objectContaining({ runnerId, organizationId: firstOrg })]);
     const job = { jobId: 'job-1', runId: 'run-1', organizationId: firstOrg, manifest: { schemaVersion: '1.0.0', id: 'login', name: 'Login' }, requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: new Date().toISOString(), requiredLabels: ['linux'] };
     const queued = await app.inject({ method: 'POST', url: `/v1/organizations/${firstOrg}/jobs`, headers: { 'x-organization-id': firstOrg }, payload: { job } });
     expect(queued.statusCode).toBe(202);
@@ -162,6 +165,24 @@ describe('OpenTestPilot server API', () => {
     expect(denied.statusCode).toBe(403);
     const completed = await app.inject({ method: 'POST', url: '/v1/jobs/job-1/complete', headers: { 'x-organization-id': firstOrg }, payload: { status: 'passed' } });
     expect(completed.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('keeps GitHub run notifications behind App credential configuration', async () => {
+    delete process.env['GITHUB_APP_ID'];
+    delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'GitHub notify' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Project' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Smoke', manifestId: 'smoke' } });
+    const testId = test.json<{ id: string }>().id;
+    const run = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/runs`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId } });
+    const repository = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/repositories`, headers: { 'x-organization-id': organizationId }, payload: { owner: 'yuga-hashimoto', name: 'open-test-pilot', installationId: 146977164 } });
+    const notification = await app.inject({ method: 'POST', url: `/v1/runs/${run.json<{ runId: string }>().runId}/github-notify`, headers: { 'x-organization-id': organizationId }, payload: { repositoryId: repository.json<{ id: string }>().id, headSha: 'abc123' } });
+    expect(notification.statusCode).toBe(503);
+    expect(notification.json<{ error: string }>().error).toContain('not configured');
     await app.close();
   });
 
@@ -180,6 +201,21 @@ describe('OpenTestPilot server API', () => {
     expect(invalid.statusCode).toBe(400);
     const webhook = await app.inject({ method: 'POST', url: '/v1/webhooks/github', payload: { action: 'push' } });
     expect(webhook.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it('triggers an enabled schedule into the tenant queue', async () => {
+    const app = buildServer();
+    const organization = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Schedule trigger org' } });
+    const organizationId = organization.json<{ id: string }>().id;
+    const project = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/projects`, headers: { 'x-organization-id': organizationId }, payload: { name: 'Scheduled project' } });
+    const projectId = project.json<{ id: string }>().id;
+    const test = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/tests`, headers: { 'x-organization-id': organizationId }, payload: { projectId, name: 'Scheduled test', manifestId: 'scheduled-test' } });
+    const testId = test.json<{ id: string }>().id;
+    const schedule = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/schedules`, headers: { 'x-organization-id': organizationId }, payload: { projectId, testId, cron: '*/5 * * * *' } });
+    const triggered = await app.inject({ method: 'POST', url: `/v1/schedules/${schedule.json<{ id: string }>().id}/trigger`, headers: { 'x-organization-id': organizationId } });
+    expect(triggered.statusCode).toBe(202);
+    expect(triggered.json<{ trigger: string; runId: string }>().trigger).toBe('schedule');
     await app.close();
   });
 

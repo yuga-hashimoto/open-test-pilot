@@ -1,55 +1,39 @@
 # Design requirement audit
 
-This is the live audit of the attached platform design against `main`. It is intentionally explicit about external gates and areas that are not yet complete.
+This is the current audit of the attached platform design against `main`. It records only evidence that was re-run in this working session; external gates are deliberately not marked complete.
 
-## Current verification note (2026-07-17)
+## Current verification (2026-07-17)
 
-The implementation was extended after the previous `main` audit: generated Manifest conditions now evaluate comparisons, function calls have scoped arguments, control-flow bounds are validated, `waitUntil` executes its child actions, external Unit/Component/Integration results are imported through the server, artifact retention deletion removes both storage and metadata with an audit event, the web editor exposes natural-language/form/custom-code/results surfaces, and generated/license/release CI gates are executable.
-
-The exact live evidence and environment gates are recorded in [ACCEPTANCE_EVIDENCE.md](ACCEPTANCE_EVIDENCE.md). An installed GitHub App is not the same as a successful App JWT write, a generated Appium test is not a device run, and a Docker executor test is not a successful image build when the local daemon cannot create a network.
-
-| Design area | Current evidence | Status |
+| Area | Current evidence | Status |
 | --- | --- | --- |
-| Manifest schema and stable IDs | `packages/manifest-schema`, AJV tests, YAML parser/normalizer | Implemented for the supported v1 action set |
-| Web/API/control-flow execution | Playwright adapter, API adapter, complex fixture flow and generated Playwright run | Implemented for supported actions |
-| Mobile Manifest path | Mobile schema, WebdriverIO generator, Local Runner branch, Appium adapter, real Android gate | Android implemented; iOS requires an available XCUITest device/simulator |
-| Mobile failure evidence | Screenshot, page source, activity, Appium/logcat, unavailable reasons, locator metadata | Implemented and tested |
-| Local HTML report | Report package and local runner artifacts | Implemented |
-| Server tenant API | Fastify routes, tenant checks, tenant-isolated queue, artifact store, manifest CRUD, result failures/steps; PostgreSQL repository and forced RLS live smoke; result persistence adapters | Core run/result/artifact plus schedules, change requests, repairs, and pull-request records persist through InMemory/PostgreSQL repositories; restart smoke and tenant isolation are verified. `AUTH_REQUIRED=true` enforces a short-lived GitHub OAuth session and organization membership; local mode keeps the explicit tenant-header path |
-| MCP contract | 19 declared tools and live `tools/list` smoke test | Implemented; some server resources still expose minimal records |
-| GitHub App | Real installation credentials, branch/commit/PR/check/comment smoke flow | Repository metadata and installation access are persisted and synced through a read-only live GitHub App flow; branch/PR/check/comment writes remain policy-gated adapters |
-| Distributed Runner | Registration, heartbeat, lease, completion, immutable manifest snapshot, Docker execution, generated/report artifact upload, result/failure/step retrieval, explicit manifest network permission | Implemented for server → Runner → Docker → result/artifact flow, Redis lease expiry reassignment, tenant/capability matching, and heartbeat keepalive; durable retry policy remains an operational gate |
-| AI Worker | Policy gate, repair proposal validation, injectable clone/fetch/checkout → Claude → validate → run → optional YAML-only PR workflow | Guarded workflow is implemented and tested; production Claude credentials, repository token injection, and automatic retry/reassignment remain external gates |
-| Web editor | Live YAML manifest load/save and tests/runs/schedules views | Tree, Monaco YAML, generated TypeScript, graph, and diff views are implemented; real browser edit/save persisted to the team API; PR workflow and full evidence screens remain partial |
-| Storage/secrets | Local/S3-compatible adapters, secret provider SDK, redaction helpers | Local/S3 retention purge plus Vault, AWS Secrets Manager, Google Secret Manager, Azure Key Vault, GitHub Actions, encryption/rotation/masking are implemented and unit-tested; retention administration UI remains partial |
-| CI/release | CI workflow, Dockerfiles/Compose, Helm values/templates, OSS governance docs | CI now has explicit plugin/package, docs/Helm, Manifest contract, and clean PostgreSQL migration/RLS gates; signed release/publish automation remains further work |
+| Manifest/DSL | AJV schema, YAML parser, generated TypeScript, nested control-flow and custom-action tests | Implemented for the supported v1 action set |
+| Source-first generation | `testpilot source analyze examples/fixtures/web/server.mjs --framework nextjs --output /tmp/opentestpilot-generated.yaml` produced a schema-valid Manifest with source findings and executable actions | Implemented for the supported heuristic analyzers; broad framework inference remains an extension point |
+| Web/API execution | `complex-flow.yaml` ran locally as `run-1784243071149-iwqizq`, passed with 5 steps and 9 artifacts including screenshot, trace, network log, generated code, and source map | Passed |
+| Team API/editor | Live browser loaded the tenant API, edited Natural language, saved the Manifest, viewed Generated TS and Graph, and selected a real passed run | Passed for current editor/API surface; overview metrics and full evidence viewer are still partial |
+| Server result/artifacts | Run `run-eb6ac2d4-93c9-4933-921b-d05b8bb72fae` completed through register → lease → upload 11 artifacts → complete; report SHA256 verified as `3814b80b9b03b26783eec74bf3370a9ecd771f03c57e2909534bd963c2444699` | Passed in the in-memory server path |
+| Distributed Docker Runner | Fresh `docker build` passed for both runner/server images. Latest `test:docker:smoke` run `run-29dd69fd-a2e9-4181-b6a1-94ec1c4c3e3a` passed through the rebuilt Docker runner → Chromium → artifact upload with 8 artifacts and 0 failures | Passed |
+| Runner fleet UI/API | Added tenant-safe `GET /v1/organizations/:organizationId/runners`; queue and server tests cover registration/listing/tenant isolation, and the web UI consumes the live list | Implemented |
+| GitHub App | Existing Chrome session showed `OpenTestPilot E2E` installed for `yuga-hashimoto/open-test-pilot`, installation `146977164`, with Checks, Contents, statuses, Issues, and Pull requests write permissions | Installation proof passed; JWT write/check/comment/PR smoke is pending GitHub Mobile sudo approval and private-key handling |
+| GitHub run notification | Added tenant-safe `POST /v1/runs/:runId/github-notify`, which creates Check Run, commit status, and optional issue comment through the App token | Code/test gate passed; live write not yet performed |
+| AI Worker | Added structured CLI parsing and a first-class Codex worker. Unit test executes a Codex-compatible process; real Codex `exec --json --model gpt-5.5` returned a correlated structured result in a direct probe. A repository-bound real probe currently times out or reports inaccessible repository, so repair/publish is not claimed | Protocol integration implemented; full repair loop remains external/repository gate |
+| Mobile | Android gate passed on `emulator-5554` (Android 16/API 36) with Appium 3.5.2 + UiAutomator2 8.1.0: direct selector assertion and Manifest launch/assert/screenshot both passed; PNG/page-source/activity/logcat evidence captured under `packages/appium-adapter/.testpilot/mobile-integration/` | Android execution verified; iOS remains protocol/code-generation only because no XCUITest simulator/device is configured |
+| Schedules/triggers | Schedule CRUD and cron validation are covered. Live server smoke called `POST /v1/schedules/:scheduleId/trigger` and returned `202`, `trigger: schedule`, and queued run `run-7b49ef35-6221-4c20-8885-11680d9d5c01`; webhook signature verification is covered | Automatic cron daemon and signed webhook deployment remain external operational gates |
+| Storage/secrets | Local/S3 adapters, provider SDKs, masking, and retention code are tested | Production provider and administration UI are not live-verified |
+| CI/release | CI, docs, generated snapshot, license, security, and release scripts exist | Final fresh command matrix is listed below and must pass before merge |
 
-## Verified commands
-
-The Android verification command is documented in [ANDROID_APPIUM.md](./ANDROID_APPIUM.md). Before claiming platform completion, rerun the full workspace gate:
+## Required local gate
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm lint
-pnpm test
 pnpm typecheck
+pnpm test
 pnpm build
+pnpm verify:generated
+pnpm license:report
+pnpm release:artifacts
+pnpm security:audit
 git diff --check
 ```
 
-The audit is not a substitute for the remaining product work; it is the checklist used to prevent a passing unit suite from being mistaken for completion of the full design.
-
-Latest evidence from the current working tree:
-
-- `pnpm lint`, `pnpm test`, `pnpm typecheck`, `pnpm build`, and `git diff --check` pass on this working tree (39 test files, 268 tests including 2 skips).
-- A real browser session loaded a server-backed Manifest, edited YAML, saved it, and queued a run.
-- A real Runner leased a server job, executed the immutable Manifest snapshot in the rebuilt Docker image, uploaded generated code/report artifacts, and exposed passed status, failures, steps, and artifact metadata through the tenant API.
-- PostgreSQL live smoke persisted one `test_results` row and one `step_results` row; the result was then read back through the API with RLS enabled.
-- A live PostgreSQL-backed Repository synced through the configured GitHub App and persisted the GitHub repository ID and installation ID; the installation list API returned one accessible repository.
-- A real Android Appium 3.5.2 session on `emulator-5554` ran the CLI Manifest path and produced an HTML report with screenshot evidence.
-- A real browser exercised the editor Tree, Monaco YAML, Generated TypeScript, Graph, and Diff views; Monaco edit/save persisted an edited Manifest through the live tenant API.
-- A clean temporary PostgreSQL database accepted migrations 001 through 008 in order; schedules, change requests, pull requests, and repair attempts reported both RLS enabled and forced, and `auth_sessions` was present.
-- The rebuilt `opentestpilot-server:local` and `opentestpilot-runner:local` images passed build; the Runner image executed a host-reachable Chromium job and returned a passed result with seven container artifacts.
-- The AI Worker workflow passed focused tests for safe validation/run/publish gating, and `GitWorkspaceManager` cloned and checked out the repository's real `main` commit in a temporary workspace.
-
-The remaining rows above are explicit scope or external-environment gates, not hidden failures: iOS needs an available XCUITest device/simulator, Monaco/PR workflow needs the hosted editor lane, and release/storage administration need their production matrix and lifecycle UI.
+Passing this gate does not imply that GitHub writes, mobile devices, production PostgreSQL/Redis, or production storage credentials are available. Those require the live gates listed above.

@@ -349,6 +349,7 @@ interface CreateScheduleBody { projectId: string; testId: string; cron: string; 
 export interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
 interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: number }
+interface PublishGitHubRunBody { repositoryId: string; headSha: string; issueNumber?: number; comment?: string }
 export interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
 interface CreateChangeRequestBody { title: string; description?: string }
 export interface RepairRecord { id: string; organizationId: string; runId: string; reason: string; status: 'queued'; createdAt: string }
@@ -689,6 +690,36 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.code(201).send(repair);
   });
 
+  app.post<{ Params: RunParams; Headers: TenantHeaders; Body: PublishGitHubRunBody }>('/v1/runs/:runId/github-notify', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.repositoryId !== 'string' || typeof body.headSha !== 'string' || body.headSha.trim() === '') return reply.code(400).send({ error: 'repositoryId and headSha are required' });
+    const record = await repository.getRepository(organizationId, body.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support GitHub notifications' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App notifications are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const github = new GitHubApiClient(installationToken.token);
+      const conclusion = run.status === 'passed' ? 'success' : run.status === 'failed' ? 'failure' : undefined;
+      const check = await github.createCheckRun(record.owner, record.name, { name: 'OpenTestPilot', headSha: body.headSha, status: conclusion === undefined ? 'in_progress' : 'completed', ...(conclusion === undefined ? {} : { conclusion }), title: `OpenTestPilot ${run.status}`, summary: `Run ${run.id} finished with status ${run.status}.` });
+      const commitState = conclusion === undefined ? 'pending' : conclusion === 'success' ? 'success' : 'failure';
+      await github.createCommitStatus(record.owner, record.name, body.headSha, commitState, `OpenTestPilot run ${run.status}`, check.htmlUrl);
+      const comment = typeof body.issueNumber === 'number' ? await github.createIssueComment(record.owner, record.name, body.issueNumber, body.comment ?? `OpenTestPilot run ${run.id}: ${run.status}`) : undefined;
+      return reply.send({ runId: run.id, repositoryId: record.id, check, commitState, ...(comment === undefined ? {} : { comment }) });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post<{ Headers: TenantHeaders; Body: { url?: string } }>('/v1/pull-requests', async (request, reply) => {
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
@@ -768,6 +799,11 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.code(201).send(runner);
   });
 
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/runners', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ organizationId: request.params.organizationId, runners: await executionQueue.listRunners(request.params.organizationId) });
+  });
+
   app.post<{ Params: RunnerParams; Headers: TenantHeaders }>('/v1/runners/:runnerId/heartbeat', async (request, reply) => {
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
@@ -822,6 +858,22 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send({ schedules: await repository.listSchedules(request.params.organizationId) });
   });
 
+  app.post<{ Params: { scheduleId: string }; Headers: TenantHeaders }>('/v1/schedules/:scheduleId/trigger', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const schedule = (await repository.listSchedules(organizationId)).find((candidate) => candidate.id === request.params.scheduleId);
+    if (schedule === undefined) return reply.code(404).send({ error: 'schedule not found' });
+    if (!schedule.enabled) return reply.code(409).send({ error: 'schedule is disabled' });
+    const test = await repository.getTest(organizationId, schedule.testId);
+    const project = await repository.getProject(organizationId, schedule.projectId);
+    if (test === undefined || project === undefined) return reply.code(404).send({ error: 'scheduled project or test not found' });
+    const run = await repository.createRun(organizationId, project.id, test.id);
+    const manifestDocument = await repository.getTestManifest(organizationId, test.id);
+    const job: Job = { jobId: `job-${run.id}`, runId: run.id, organizationId, projectId: project.id, manifest: { schemaVersion: '1.0.0', id: test.manifestId, name: test.name }, ...(manifestDocument === undefined ? {} : { manifestDocument }), requestedCapabilities: { browsers: ['chromium'], maxConcurrency: 1 }, status: 'queued', createdAt: run.createdAt, executionMode: 'docker', priority: 0 };
+    if (!await executionQueue.enqueue(organizationId, job)) return reply.code(503).send({ error: 'run queue unavailable' });
+    return reply.code(202).send({ scheduleId: schedule.id, runId: run.id, status: run.status, trigger: 'schedule' });
+  });
+
   app.post<{ Headers: { 'x-hub-signature-256'?: string; 'x-github-delivery'?: string; 'x-github-event'?: string }; Body: Record<string, unknown> }>('/v1/webhooks/github', async (request, reply) => {
     const secret = process.env['GITHUB_WEBHOOK_SECRET'];
     if (secret === undefined) return reply.code(503).send({ error: 'GitHub webhook verification is not configured' });
@@ -852,17 +904,19 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/runs/{runId}/steps/{stepId}': { get: {} },
     '/v1/runs/{runId}/compare/{baselineRunId}': { get: {} },
     '/v1/runs/{runId}/repair': { post: {} },
+    '/v1/runs/{runId}/github-notify': { post: {} },
     '/v1/runs/{runId}/artifacts': { post: {}, get: {} },
     '/v1/organizations/{organizationId}/artifacts/purge': { post: {} },
     '/v1/artifacts/{artifactId}': { get: {} },
     '/v1/artifacts/{artifactId}/metadata': { get: {} },
     '/v1/pull-requests': { post: {} },
-    '/v1/organizations/{organizationId}/runners': { post: {} },
+    '/v1/organizations/{organizationId}/runners': { get: {}, post: {} },
     '/v1/runners/{runnerId}/heartbeat': { post: {} },
     '/v1/organizations/{organizationId}/jobs': { post: {} },
     '/v1/runners/{runnerId}/lease': { post: {} },
     '/v1/jobs/{jobId}/complete': { post: {} },
     '/v1/organizations/{organizationId}/schedules': { get: {}, post: {} },
+    '/v1/schedules/{scheduleId}/trigger': { post: {} },
     '/v1/webhooks/github': { post: {} },
   }).map(([path, operations]) => [path, Object.fromEntries(Object.entries(operations).map(([method, operation]) => [method, { ...(operation as Record<string, unknown>), responses: { '200': { description: 'Successful response' } } }]))])) }));
 

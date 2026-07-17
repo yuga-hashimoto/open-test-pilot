@@ -19,6 +19,7 @@
     "@open-test-pilot/manifest-migrator": "workspace:*",
     "@open-test-pilot/playwright-adapter": "workspace:*",
     "@open-test-pilot/manifest-parser": "workspace:*",
+    "@open-test-pilot/source-analyzer": "workspace:*",
     "@open-test-pilot/report": "workspace:*",
     "@open-test-pilot/result-schema": "workspace:*",
     "yaml": "^2.8.1",

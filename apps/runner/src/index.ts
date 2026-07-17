@@ -52,6 +52,7 @@ export interface RunnerLoopOptions {
 }
 
 export async function runJobWithHeartbeat(client: RunnerClient, runnerId: string, job: Job, heartbeatIntervalMs: number, execute: (job: Job) => Promise<ExecutionResult>): Promise<ExecutionResult> {
+  void client.heartbeat(runnerId).catch(() => undefined);
   const timer = setInterval(() => { void client.heartbeat(runnerId).catch(() => undefined); }, Math.max(1, heartbeatIntervalMs));
   try {
     return await execute(job);

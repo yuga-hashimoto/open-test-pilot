@@ -9,12 +9,15 @@ export interface ApiArtifact { id: string; runId: string; key: string; contentTy
 export interface ApiRunEvidence { failures: ApiFailure[]; artifacts: ApiArtifact[]; report: { runId: string; status: ApiRun['status']; reportUrl?: string }; }
 export interface ApiChangeRequest { id: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string; }
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
+export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
 
 export interface TestPilotApi {
   listTests(): Promise<ApiTest[]>;
   listRuns(): Promise<ApiRun[]>;
   listSchedules(): Promise<ApiSchedule[]>;
+  listRunners(): Promise<ApiRunner[]>;
   startRun(projectId: string, testId: string): Promise<{ runId: string; status: ApiRun['status'] }>;
+  triggerSchedule(scheduleId: string): Promise<{ scheduleId: string; runId: string; status: ApiRun['status']; trigger: 'schedule' }>;
   getRun(runId: string): Promise<ApiRun>;
   getTest(testId: string): Promise<ApiTest>;
   getManifest(testId: string): Promise<ApiTestManifest>;
@@ -50,7 +53,9 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async listTests() { return (await request<{ tests: ApiTest[] }>(`/v1/organizations/${pathId(config.organizationId)}/tests`)).tests; },
     async listRuns() { return (await request<{ runs: ApiRun[] }>(`/v1/organizations/${pathId(config.organizationId)}/runs`)).runs; },
     async listSchedules() { return (await request<{ schedules: ApiSchedule[] }>(`/v1/organizations/${pathId(config.organizationId)}/schedules`)).schedules; },
+    async listRunners() { return (await request<{ runners: ApiRunner[] }>(`/v1/organizations/${pathId(config.organizationId)}/runners`)).runners; },
     async startRun(projectId, testId) { return await request<{ runId: string; status: ApiRun['status'] }>(`/v1/organizations/${pathId(config.organizationId)}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, testId }) }); },
+    async triggerSchedule(scheduleId) { return await request<{ scheduleId: string; runId: string; status: ApiRun['status']; trigger: 'schedule' }>(`/v1/schedules/${pathId(scheduleId)}/trigger`, { method: 'POST' }); },
     async getRun(runId) { return await request<ApiRun>(`/v1/runs/${pathId(runId)}`); },
     async getTest(testId) { return await request<ApiTest>(`/v1/tests/${pathId(testId)}`); },
     async getManifest(testId) { return await request<ApiTestManifest>(`/v1/tests/${pathId(testId)}/manifest`); },

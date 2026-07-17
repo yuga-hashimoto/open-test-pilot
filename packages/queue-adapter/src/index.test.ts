@@ -7,6 +7,7 @@ describe('execution queue', () => {
   it('registers, leases, and completes a tenant-scoped job', async () => {
     const queue = new MemoryExecutionQueue();
     const runner = await queue.registerRunner('org-1', 'runner', { browsers: ['chromium'], maxConcurrency: 1, labels: ['linux'] });
+    expect(await queue.listRunners('org-1')).toEqual([runner]);
     expect(await queue.enqueue('org-1', job('org-1'))).toBe(true);
     expect(await queue.lease('org-1', runner.runnerId)).toMatchObject({ jobId: 'job-1', status: 'leased' });
     expect(await queue.complete('org-1', 'job-1', 'passed')).toMatchObject({ status: 'passed' });

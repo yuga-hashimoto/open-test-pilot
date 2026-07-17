@@ -6,6 +6,7 @@ import { Scheduler, type RunnerCapabilities } from '@open-test-pilot/scheduler';
 export interface RegisteredRunner { runnerId: string; organizationId: string; name: string; capabilities: RunnerCapabilities; heartbeatAt: string; }
 export interface ExecutionQueue {
   registerRunner(organizationId: string, name: string, capabilities: Capabilities): Promise<RegisteredRunner>;
+  listRunners(organizationId: string): Promise<RegisteredRunner[]>;
   heartbeat(organizationId: string, runnerId: string): Promise<boolean>;
   enqueue(organizationId: string, job: Job): Promise<boolean>;
   lease(organizationId: string, runnerId: string): Promise<Job | undefined>;
@@ -25,6 +26,7 @@ export class MemoryExecutionQueue implements ExecutionQueue {
     const runner = { runnerId, organizationId, name, capabilities: { ...capabilities, runnerId }, heartbeatAt: new Date().toISOString() };
     this.runners.set(runnerId, runner); this.organizations.set(runnerId, organizationId); return runner;
   }
+  async listRunners(organizationId: string): Promise<RegisteredRunner[]> { return [...this.runners.values()].filter((runner) => runner.organizationId === organizationId); }
   async heartbeat(organizationId: string, runnerId: string): Promise<boolean> { const runner = this.runners.get(runnerId); if (runner?.organizationId !== organizationId) return false; runner.heartbeatAt = new Date().toISOString(); return true; }
   private scheduler(organizationId: string): Scheduler { let scheduler = this.schedulers.get(organizationId); if (scheduler === undefined) { scheduler = new Scheduler({ leaseDurationMs: this.leaseDurationMs }); this.schedulers.set(organizationId, scheduler); } return scheduler; }
   async enqueue(organizationId: string, job: Job): Promise<boolean> { const accepted = job.organizationId === organizationId && this.scheduler(organizationId).enqueue(job); if (accepted) this.jobs.set(job.jobId, job); return accepted; }
@@ -53,6 +55,7 @@ export class RedisExecutionQueue implements ExecutionQueue {
   private key(kind: string, id: string): string { return `${this.prefix}:${kind}:${id}`; }
   private async ready(): Promise<RedisLike> { if (!this.connected) { await this.client.connect(); this.connected = true; } return this.client; }
   async registerRunner(organizationId: string, name: string, capabilities: Capabilities): Promise<RegisteredRunner> { const client = await this.ready(); const runnerId = `runner-${randomUUID()}`; const runner = { runnerId, organizationId, name, capabilities: { ...capabilities, runnerId }, heartbeatAt: new Date().toISOString() }; await client.set(this.key('runner', runnerId), JSON.stringify(runner)); await client.sAdd(this.key('org-runners', organizationId), runnerId); return runner; }
+  async listRunners(organizationId: string): Promise<RegisteredRunner[]> { const client = await this.ready(); const ids = await client.sMembers(this.key('org-runners', organizationId)); const values = await Promise.all(ids.map((runnerId) => client.get(this.key('runner', runnerId)))); return values.flatMap((value) => { if (value === null) return []; try { return [JSON.parse(value) as RegisteredRunner]; } catch { return []; } }); }
   async heartbeat(organizationId: string, runnerId: string): Promise<boolean> { const client = await this.ready(); const raw = await client.get(this.key('runner', runnerId)); if (raw === null) return false; const runner = JSON.parse(raw) as RegisteredRunner; if (runner.organizationId !== organizationId) return false; runner.heartbeatAt = new Date().toISOString(); await client.set(this.key('runner', runnerId), JSON.stringify(runner)); return true; }
   async enqueue(organizationId: string, job: Job): Promise<boolean> { if (job.organizationId !== organizationId) return false; const client = await this.ready(); const key = this.key('job', job.jobId); if (await client.exists(key)) return false; await client.set(key, JSON.stringify({ ...job, status: 'queued' })); const score = Date.parse(job.createdAt) - (job.priority ?? 0) * 1_000_000_000_000; await client.zAdd(this.key('queue', organizationId), { score, value: job.jobId }); return true; }
   async lease(organizationId: string, runnerId: string): Promise<Job | undefined> {
