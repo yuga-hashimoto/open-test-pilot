@@ -2,11 +2,15 @@
 
 export interface ApiTest { id: string; projectId: string; name: string; manifestId: string; createdAt: string; }
 export interface ApiTestManifest { testId?: string; manifestId?: string; schemaVersion?: string; [key: string]: unknown; }
+export interface ApiManifestVersion { id: string; organizationId: string; testId: string; version: number; commitSha: string; manifest: ApiTestManifest; createdAt: string; }
 export interface ApiRun { id: string; projectId: string; testId: string; status: 'queued' | 'running' | 'passed' | 'failed' | 'cancelled'; createdAt: string; startedAt?: string; endedAt?: string; }
 export interface ApiSchedule { id: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string; }
 export interface ApiFailure { message: string; category?: string; artifacts?: string[]; [key: string]: unknown; }
 export interface ApiArtifact { id: string; runId: string; key: string; contentType: string; size: number; storageKey: string; sha256: string; createdAt: string; }
 export interface ApiRunEvidence { failures: ApiFailure[]; artifacts: ApiArtifact[]; report: { runId: string; status: ApiRun['status']; reportUrl?: string }; }
+export interface ApiActionResult { actionId: string; type: string; status: string; error?: Record<string, unknown>; artifacts?: string[]; [key: string]: unknown; }
+export interface ApiStepResult { stepId: string; status: string; actions: ApiActionResult[]; [key: string]: unknown; }
+export interface ApiRunResult { steps: ApiStepResult[]; failures: ApiFailure[]; [key: string]: unknown; }
 export interface ApiChangeRequest { id: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string; }
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
@@ -42,6 +46,7 @@ export interface TestPilotApi {
   getRun(runId: string): Promise<ApiRun>;
   getTest(testId: string): Promise<ApiTest>;
   getManifest(testId: string): Promise<ApiTestManifest>;
+  listManifestVersions(testId: string): Promise<ApiManifestVersion[]>;
   updateManifest(testId: string, manifest: ApiTestManifest): Promise<{ testId: string; saved: boolean }>;
   listRepositories(): Promise<ApiRepository[]>;
   syncRepository(repositoryId: string): Promise<ApiRepository>;
@@ -54,6 +59,7 @@ export interface TestPilotApi {
   createChangeRequest(title: string, description?: string): Promise<ApiChangeRequest>;
   updateChangeRequest(id: string, patch: { status?: ApiChangeRequest['status']; description?: string }): Promise<ApiChangeRequest>;
   getRunFailures(runId: string): Promise<ApiFailure[]>;
+  getRunResult(runId: string): Promise<ApiRunResult>;
   listArtifacts(runId: string): Promise<ApiArtifact[]>;
   getArtifactContent(artifactId: string): Promise<Blob>;
   getReport(runId: string): Promise<{ runId: string; status: ApiRun['status']; reportUrl?: string }>;
@@ -98,6 +104,7 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async getRun(runId) { return await request<ApiRun>(`/v1/runs/${pathId(runId)}`); },
     async getTest(testId) { return await request<ApiTest>(`/v1/tests/${pathId(testId)}`); },
     async getManifest(testId) { return await request<ApiTestManifest>(`/v1/tests/${pathId(testId)}/manifest`); },
+    async listManifestVersions(testId) { return (await request<{ testId: string; versions: ApiManifestVersion[] }>(`/v1/tests/${pathId(testId)}/manifest/versions`)).versions; },
     async updateManifest(testId, manifest) { return await request<{ testId: string; saved: boolean }>(`/v1/tests/${pathId(testId)}/manifest`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(manifest) }); },
     async listRepositories() { return (await request<{ repositories: ApiRepository[] }>(`/v1/organizations/${pathId(config.organizationId)}/repositories`)).repositories; },
     async syncRepository(repositoryId) { return await request<ApiRepository>(`/v1/repositories/${pathId(repositoryId)}/sync`, { method: 'POST' }); },
@@ -110,6 +117,7 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async createChangeRequest(title, description) { return await request<ApiChangeRequest>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, ...(description === undefined ? {} : { description }) }) }); },
     async updateChangeRequest(id, patch) { return await request<ApiChangeRequest>(`/v1/change-requests/${pathId(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },
     async getRunFailures(runId) { return (await request<{ failures: ApiFailure[] }>(`/v1/runs/${pathId(runId)}/failures`)).failures; },
+    async getRunResult(runId) { return (await request<{ runId: string; result: ApiRunResult }>(`/v1/runs/${pathId(runId)}/result`)).result; },
     async listArtifacts(runId) { return (await request<{ artifacts: ApiArtifact[] }>(`/v1/runs/${pathId(runId)}/artifacts`)).artifacts; },
     async getArtifactContent(artifactId) {
       const response = await fetcher(`${config.baseUrl}/v1/artifacts/${pathId(artifactId)}`, { headers });

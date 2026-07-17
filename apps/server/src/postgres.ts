@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
-import type { AiWorkerJobRecord, AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { AiWorkerJobRecord, AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, ManifestVersionRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -138,6 +138,13 @@ export class PostgresTenantRepository implements TenantRepository {
       if (test.rows[0] === undefined) return false;
       await client.query('INSERT INTO test_versions (organization_id, test_id, commit_sha, manifest) VALUES ($1, $2, $3, $4::jsonb)', [organizationId, id, process.env['GIT_COMMIT_SHA'] ?? 'local', JSON.stringify(manifest)]);
       return true;
+    });
+  }
+
+  async listManifestVersions(organizationId: string, testId: string): Promise<ManifestVersionRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<{ id: string; organization_id: string; test_id: string; commit_sha: string; manifest: unknown; created_at: Date }>('SELECT id, organization_id, test_id, commit_sha, manifest, created_at FROM test_versions WHERE organization_id = $1 AND test_id = $2 ORDER BY created_at DESC, id DESC', [organizationId, testId]);
+      return result.rows.map((row, index) => ({ id: row.id, organizationId: row.organization_id, testId: row.test_id, version: result.rows.length - index, commitSha: row.commit_sha, manifest: row.manifest, createdAt: dateValue(row.created_at) }));
     });
   }
 

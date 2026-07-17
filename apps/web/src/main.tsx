@@ -17,12 +17,14 @@ import {
   type ApiProject,
   type ApiRepository,
   type ApiRun,
+  type ApiRunResult,
   type ApiRunner,
   type ApiSchedule,
   type ApiSecret,
   type ApiStoragePolicy,
   type ApiTest,
   type ApiTestManifest,
+  type ApiManifestVersion,
   type TestPilotApi,
 } from "./api.js";
 import "./style.css";
@@ -132,6 +134,9 @@ function App() {
   const [manifestBaseline, setManifestBaseline] = useState("");
   const [manifestStatus, setManifestStatus] = useState<string | undefined>();
   const [manifestLoading, setManifestLoading] = useState(false);
+  const [manifestVersions, setManifestVersions] = useState<ApiManifestVersion[]>(
+    [],
+  );
   const [connection, setConnection] = useState<"demo" | "live" | "error">(
     api === undefined ? "demo" : "live",
   );
@@ -251,6 +256,7 @@ function App() {
     setManifestStatus(undefined);
     setManifestLoading(api !== undefined);
     if (api === undefined) {
+      setManifestVersions([]);
       const initial = stringifyYaml({
         schemaVersion: "1.0.0",
         id: test.manifestId,
@@ -261,12 +267,12 @@ function App() {
       setManifestBaseline(initial);
       return;
     }
-    void api
-      .getManifest(test.id)
-      .then((value) => {
+    void Promise.all([api.getManifest(test.id), api.listManifestVersions(test.id)])
+      .then(([value, versions]) => {
         const initial = stringifyYaml(value);
         setManifestText(initial);
         setManifestBaseline(initial);
+        setManifestVersions(versions);
         setManifestLoading(false);
       })
       .catch(() => {
@@ -286,8 +292,9 @@ function App() {
     }
     void api
       .updateManifest(editingTest.id, parsed)
-      .then(() => {
+      .then(async () => {
         setManifestBaseline(stringifyYaml(parsed));
+        setManifestVersions(await api.listManifestVersions(editingTest.id));
         setManifestStatus("Saved to team server");
       })
       .catch(() => setManifestStatus("Save failed"));
@@ -616,6 +623,7 @@ function App() {
             manifestBaseline={manifestBaseline}
             manifestStatus={manifestStatus}
             manifestLoading={manifestLoading}
+            manifestVersions={manifestVersions}
             onEdit={openManifestEditor}
             onManifestChange={setManifestText}
             onSave={saveManifest}
@@ -991,6 +999,7 @@ function TestsView({
   manifestBaseline,
   manifestStatus,
   manifestLoading,
+  manifestVersions,
   onEdit,
   onManifestChange,
   onSave,
@@ -1003,6 +1012,7 @@ function TestsView({
   manifestBaseline: string;
   manifestStatus: string | undefined;
   manifestLoading: boolean;
+  manifestVersions: ApiManifestVersion[];
   onEdit: (test: ApiTest) => void;
   onManifestChange: (value: string) => void;
   onSave: () => void;
@@ -1016,6 +1026,7 @@ function TestsView({
     | "custom"
     | "graph"
     | "diff"
+    | "versions"
     | "results"
   >("yaml");
   const parsed = useMemo(() => {
@@ -1114,6 +1125,7 @@ function TestsView({
                 "custom",
                 "graph",
                 "diff",
+                "versions",
                 "results",
               ] as const
             ).map((item) => (
@@ -1136,9 +1148,11 @@ function TestsView({
                             ? "Custom code"
                             : item === "graph"
                               ? "Graph"
-                              : item === "diff"
-                                ? "Git diff"
-                                : "Results"}
+                    : item === "diff"
+                      ? "Git diff"
+                      : item === "versions"
+                        ? "Versions"
+                        : "Results"}
               </button>
             ))}
           </div>
@@ -1210,6 +1224,24 @@ function TestsView({
             <pre className="manifest-code" aria-label="Custom code references">
               {JSON.stringify(customCode, null, 2)}
             </pre>
+          ) : view === "versions" ? (
+            <div className="live-list-body" aria-label="Manifest versions">
+              {manifestVersions.length === 0 ? (
+                <p>No persisted Manifest versions yet.</p>
+              ) : (
+                manifestVersions.map((version) => (
+                  <div className="live-list-row" key={version.id}>
+                    <div>
+                      <b>Version {version.version}</b>
+                      <span>
+                        {version.commitSha} · {new Date(version.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <code>{String(version.manifest["name"] ?? version.testId)}</code>
+                  </div>
+                ))
+              )}
+            </div>
           ) : view === "results" ? (
             <div className="manifest-tree">
               <p>
@@ -1357,10 +1389,12 @@ function RunsView({
     report?: { status: string; reportUrl?: string };
   }>();
   const [artifactUrls, setArtifactUrls] = useState<Record<string, string>>({});
+  const [runResult, setRunResult] = useState<ApiRunResult | undefined>();
   useEffect(() => {
     if (api === undefined || selectedRun === undefined) {
       setEvidence(undefined);
       setArtifactUrls({});
+      setRunResult(undefined);
       return;
     }
     let disposed = false;
@@ -1371,6 +1405,21 @@ function RunsView({
       })
       .catch(() => {
         if (!disposed) setEvidence(undefined);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [api, selectedRun]);
+  useEffect(() => {
+    if (api === undefined || selectedRun === undefined) return;
+    let disposed = false;
+    void api
+      .getRunResult(selectedRun.id)
+      .then((result) => {
+        if (!disposed) setRunResult(result);
+      })
+      .catch(() => {
+        if (!disposed) setRunResult(undefined);
       });
     return () => {
       disposed = true;
@@ -1530,6 +1579,26 @@ function RunsView({
                 {JSON.stringify(failure, null, 2)}
               </pre>
             ))}
+            {runResult !== undefined && (
+              <div className="manifest-tree" aria-label="Run step and action results">
+                <b>Steps and actions</b>
+                {runResult.steps.map((step) => (
+                  <div className="live-list-row" key={step.stepId}>
+                    <div>
+                      <b>{step.stepId}</b>
+                      <span>
+                        {step.status} · {step.actions.length} actions
+                      </span>
+                      {step.actions.map((action) => (
+                        <span key={action.actionId}>
+                          {action.actionId} · {action.type} · {action.status}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </section>

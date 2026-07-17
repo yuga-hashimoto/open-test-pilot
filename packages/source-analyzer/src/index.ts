@@ -20,7 +20,7 @@ function lineFindings(file: SourceFile, pattern: RegExp, type: string, message: 
 }
 
 const frameworkPlugins: readonly SourceAnalyzerPlugin[] = [
-  { id: 'nextjs', platform: 'web', detect: (file) => [...lineFindings(file, /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE)|NextResponse|useRouter\s*\(/, 'nextjs-route', 'Next.js route or navigation surface detected')] },
+  { id: 'nextjs', platform: 'web', detect: (file) => [...lineFindings(file, /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE)|NextResponse|useRouter\s*\(|getServerSideProps|getStaticProps|pages\//, 'nextjs-route', 'Next.js App/Pages Router or navigation surface detected')] },
   { id: 'react-router', platform: 'web', detect: (file) => [...lineFindings(file, /createBrowserRouter|createRoutesFromElements|<Route\b|useNavigate\s*\(/, 'react-router-route', 'React Router route or navigation surface detected')] },
   { id: 'vue', platform: 'web', detect: (file) => [...lineFindings(file, /<script\s+setup|defineComponent|useRouter\s*\(|<RouterLink\b/, 'vue-surface', 'Vue component or navigation surface detected')] },
   { id: 'angular', platform: 'web', detect: (file) => [...lineFindings(file, /@Component\s*\(|@angular\/router|routerLink|\*ngFor/, 'angular-surface', 'Angular component, route, or repeated control detected')] },
@@ -30,9 +30,9 @@ const frameworkPlugins: readonly SourceAnalyzerPlugin[] = [
   { id: 'swagger', platform: 'api', detect: (file) => [...lineFindings(file, /swagger:\s*['"]|paths:\s*$|operationId:|^\s{2,}\/[^:]+:\s*$/, 'swagger-operation', 'Swagger operation can be exercised as an HTTP action')] },
   { id: 'postman', platform: 'api', detect: (file) => [...lineFindings(file, /["'](?:request|method|url|item)["']\s*:/, 'postman-request', 'Postman request can be exercised as an HTTP action')] },
   { id: 'graphql', platform: 'api', detect: (file) => [...lineFindings(file, /\b(?:type\s+Query|type\s+Mutation|query\s+\w+|mutation\s+\w+)\b/, 'graphql-operation', 'GraphQL operation can be exercised as an API action')] },
-  { id: 'android', platform: 'android', detect: (file) => [...lineFindings(file, /class\s+\w+Activity\b|@Composable|resource-id|contentDescription|testTag/, 'android-surface', 'Android activity, Compose, or stable locator surface detected')] },
-  { id: 'flutter', platform: 'flutter', detect: (file) => [...lineFindings(file, /MaterialApp\s*\(|GoRoute|@RoutePage|ValueKey|Semantics\s*\(/, 'flutter-surface', 'Flutter navigation, widget, or stable locator surface detected')] },
-  { id: 'ios', platform: 'ios', detect: (file) => [...lineFindings(file, /NavigationStack|NavigationView|UIViewController|accessibilityIdentifier|accessibilityLabel/, 'ios-surface', 'iOS navigation, view controller, or accessibility surface detected')] },
+  { id: 'android', platform: 'android', detect: (file) => [...lineFindings(file, /AndroidManifest|<activity\b|<fragment\b|class\s+\w+Activity\b|@Composable|NavHost|NavController|resource-id|contentDescription|testTag|retrofit2|@(?:GET|POST|PUT|DELETE)\b/, 'android-surface', 'Android manifest, activity, navigation, Compose, API, or stable locator surface detected')] },
+  { id: 'flutter', platform: 'flutter', detect: (file) => [...lineFindings(file, /MaterialApp\s*\(|GoRoute|@RoutePage|ValueKey|Semantics\s*\(|BlocProvider|Riverpod|dio\.|package:http\//, 'flutter-surface', 'Flutter navigation, widget, state, API, or stable locator surface detected')] },
+  { id: 'ios', platform: 'ios', detect: (file) => [...lineFindings(file, /NavigationStack|NavigationView|UIViewController|accessibilityIdentifier|accessibilityLabel|URLSession|Alamofire|URLRequest/, 'ios-surface', 'iOS navigation, view controller, accessibility, or API surface detected')] },
 ];
 
 export function createSourceAnalyzerRegistry(plugins: readonly SourceAnalyzerPlugin[] = frameworkPlugins): Map<SourceFramework, SourceAnalyzerPlugin> {
@@ -57,22 +57,27 @@ export function analyzeSource(file: SourceFile, registry: ReadonlyMap<SourceFram
       if (/\b(?:fetch|axios\.(?:get|post|put|delete|patch)|request\s*\()/.test(line)) add('api-client', 'REST client call can be exercised as an API action', lineNumber);
       if (/\b(?:query|mutation)\s+\w+\s*[({]/.test(line) || /\b(?:type\s+Query|type\s+Mutation)\b/.test(line)) add('graphql-operation', 'GraphQL operation can be exercised as an API action', lineNumber);
       if (/<(form|button|input)\b/i.test(line)) add('form-control', 'Interactive web control is a Manifest candidate', lineNumber);
-      if (/getByRole|getByLabel|getByTestId|data-testid|aria-label/.test(line)) add('stable-locator', 'Existing accessible/test locator can seed a stable selector', lineNumber);
+      if (/getByRole|getByLabel|getByTestId|data-testid|aria-label|placeholder\s*=|<label\b/.test(line)) add('stable-locator', 'Existing accessible/test locator can seed a stable selector', lineNumber);
+      if (/required|pattern=|onSubmit|onChange|validate\s*\(/.test(line)) add('form-validation', 'Form validation behavior can seed a negative or boundary test', lineNumber);
     }
     if (file.platform === 'android') {
-      if (/android:name="[^"]+Activity|class\s+\w+Activity\b/.test(line)) add('android-activity', 'Android Activity entry point detected', lineNumber);
+      if (/android:name="[^"]+Activity|<activity\b|class\s+\w+Activity\b/.test(line)) add('android-activity', 'Android Activity entry point detected', lineNumber);
       if (/compose\.(material|foundation)|@Composable/.test(line)) add('android-compose', 'Jetpack Compose UI surface detected', lineNumber);
       if (/resource-id|contentDescription|testTag/.test(line)) add('android-locator', 'Android stable resource/accessibility locator detected', lineNumber);
+      if (/<fragment\b|NavHost|NavController|navigation\.xml/.test(line)) add('android-navigation', 'Android Fragment or Navigation Component surface detected', lineNumber);
+      if (/retrofit2|@(?:GET|POST|PUT|DELETE)\b/.test(line)) add('android-api-client', 'Android Retrofit API client surface detected', lineNumber);
     }
     if (file.platform === 'flutter') {
       if (/@RoutePage|GoRoute|MaterialApp\s*\(/.test(line)) add('flutter-route', 'Flutter route/navigation surface detected', lineNumber);
       if (/Key\(|ValueKey|Semantics\s*\(/.test(line)) add('flutter-locator', 'Flutter key or semantics locator detected', lineNumber);
       if (/Widget build\(|class\s+\w+\s+extends\s+(Stateless|Stateful)Widget/.test(line)) add('flutter-widget', 'Flutter widget surface detected', lineNumber);
+      if (/BlocProvider|Riverpod|ConsumerWidget|dio\.|package:http\//.test(line)) add('flutter-api-state', 'Flutter Bloc/Riverpod/API client surface detected', lineNumber);
     }
     if (file.platform === 'ios') {
       if (/NavigationStack|NavigationView|UIViewController/.test(line)) add('ios-navigation', 'iOS navigation/view controller surface detected', lineNumber);
       if (/SwiftUI|View\s*\{/.test(line)) add('ios-swiftui', 'SwiftUI surface detected', lineNumber);
       if (/accessibilityIdentifier|accessibilityLabel|accessibilityValue/.test(line)) add('ios-locator', 'iOS accessibility locator detected', lineNumber);
+      if (/URLSession|URLRequest|Alamofire/.test(line)) add('ios-api-client', 'iOS URLSession/API client surface detected', lineNumber);
     }
   });
   const plugin = file.framework === undefined ? undefined : registry.get(file.framework);

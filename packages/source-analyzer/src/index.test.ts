@@ -12,6 +12,16 @@ describe('source analyzer', () => {
     expect(analyzeSource({ path: 'login.dart', platform: 'flutter', content: 'class Login extends StatelessWidget { Widget build() => Semantics(); }' }).map((finding) => finding.type)).toEqual(['flutter-locator', 'flutter-widget']);
     expect(analyzeSource({ path: 'LoginView.swift', platform: 'ios', content: 'struct LoginView: SwiftUI.View { var body: some View { Text("Login").accessibilityIdentifier("login") } }' }).map((finding) => finding.type)).toEqual(['ios-swiftui', 'ios-locator']);
   });
+  it('detects mobile navigation, API, state, and manifest surfaces', () => {
+    const android = analyzeSource({ path: 'AndroidManifest.xml', platform: 'android', content: '<activity android:name=".MainActivity" />\n<fragment android:name=".LoginFragment" />\nNavHost(navController, startDestination = "login")\ninterface Api { @GET("/users") fun users(): Call<List<User>> }' }).map((finding) => finding.type);
+    expect(android).toEqual(expect.arrayContaining(['android-activity', 'android-navigation', 'android-api-client']));
+
+    const flutter = analyzeSource({ path: 'app.dart', platform: 'flutter', content: 'BlocProvider(create: (_) => LoginBloc())\nfinal client = dio.Dio();\nGoRoute(path: "/login")' }).map((finding) => finding.type);
+    expect(flutter).toEqual(expect.arrayContaining(['flutter-api-state', 'flutter-route']));
+
+    const ios = analyzeSource({ path: 'APIClient.swift', platform: 'ios', content: 'let request = URLRequest(url: url)\nURLSession.shared.data(for: request)' }).map((finding) => finding.type);
+    expect(ios).toContain('ios-api-client');
+  });
   it('exposes framework plugins for source-first analysis and accepts custom plugins', () => {
     expect(listSourceAnalyzerPlugins().map((plugin) => plugin.id)).toEqual(expect.arrayContaining(['nextjs', 'react-router', 'vue', 'angular', 'remix', 'nuxt', 'openapi', 'android', 'flutter', 'ios']));
     const registry = createSourceAnalyzerRegistry([{ id: 'javascript', platform: 'web', detect: () => [{ type: 'custom', severity: 'info', source: { file: 'x' }, message: 'custom' }] }]);

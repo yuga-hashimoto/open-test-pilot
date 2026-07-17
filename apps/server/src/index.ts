@@ -55,6 +55,16 @@ export interface StoredRunResult {
   [key: string]: unknown;
 }
 
+export interface ManifestVersionRecord {
+  id: string;
+  organizationId: string;
+  testId: string;
+  version: number;
+  commitSha: string;
+  manifest: unknown;
+  createdAt: string;
+}
+
 export interface ArtifactMetadata {
   id: string;
   organizationId: string;
@@ -157,6 +167,7 @@ export interface TenantRepository {
   getTest(organizationId: string, id: string): MaybePromise<TestRecord | undefined>;
   getTestManifest(organizationId: string, id: string): MaybePromise<unknown | undefined>;
   updateTestManifest(organizationId: string, id: string, manifest: unknown): MaybePromise<boolean>;
+  listManifestVersions(organizationId: string, testId: string): MaybePromise<ManifestVersionRecord[]>;
   createRun(organizationId: string, projectId: string, testId: string): MaybePromise<RunRecord>;
   getRun(id: string, organizationId?: string): MaybePromise<RunRecord | undefined>;
   listRuns(organizationId: string): MaybePromise<RunRecord[]>;
@@ -209,6 +220,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly tests = new Map<string, TestRecord>();
   private readonly runs = new Map<string, RunRecord>();
   private readonly manifests = new Map<string, unknown>();
+  private readonly manifestVersions = new Map<string, ManifestVersionRecord[]>();
   private readonly runResults = new Map<string, StoredRunResult>();
   private readonly artifacts = new Map<string, ArtifactMetadata>();
   private readonly auditEvents: AuditEventRecord[] = [];
@@ -305,8 +317,13 @@ export class InMemoryTenantRepository implements TenantRepository {
   updateTestManifest(organizationId: string, id: string, manifest: unknown): boolean {
     if (this.getTest(organizationId, id) === undefined) return false;
     this.manifests.set(id, manifest);
+    const versions = this.manifestVersions.get(id) ?? [];
+    versions.push({ id: `manifest-version-${randomUUID()}`, organizationId, testId: id, version: versions.length + 1, commitSha: process.env['GIT_COMMIT_SHA'] ?? 'local', manifest, createdAt: new Date().toISOString() });
+    this.manifestVersions.set(id, versions);
     return true;
   }
+
+  listManifestVersions(organizationId: string, testId: string): ManifestVersionRecord[] { return (this.manifestVersions.get(testId) ?? []).filter((version) => version.organizationId === organizationId).slice().reverse(); }
 
   createRun(organizationId: string, projectId: string, testId: string): RunRecord {
     const run = { id: `run-${randomUUID()}`, organizationId, projectId, testId, status: 'queued' as const, createdAt: new Date().toISOString() };
@@ -318,9 +335,9 @@ export class InMemoryTenantRepository implements TenantRepository {
 
   listRuns(organizationId: string): RunRecord[] { return [...this.runs.values()].filter((run) => run.organizationId === organizationId); }
 
-  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, _organizationId?: string): RunRecord | undefined {
+  updateRun(id: string, patch: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>, organizationId?: string): RunRecord | undefined {
     const current = this.runs.get(id);
-    if (current === undefined) return undefined;
+    if (current === undefined || (organizationId !== undefined && current.organizationId !== organizationId)) return undefined;
     const updated = { ...current, ...patch };
     this.runs.set(id, updated);
     return updated;
@@ -962,6 +979,14 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send(manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest) ? { testId: test.id, manifestId: test.manifestId, ...(manifest as Record<string, unknown>) } : { testId: test.id, manifestId: test.manifestId, schemaVersion: '1.0.0' });
   });
 
+  app.get<{ Params: ResourceParams; Headers: TenantHeaders }>('/v1/tests/:id/manifest/versions', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const test = await repository.getTest(organizationId, request.params.id);
+    if (test === undefined) return reply.code(404).send({ error: 'test not found' });
+    return reply.send({ testId: test.id, versions: await repository.listManifestVersions(organizationId, test.id) });
+  });
+
   app.put<{ Params: ResourceParams; Headers: TenantHeaders; Body: unknown }>('/v1/tests/:id/manifest', async (request, reply) => {
     const organizationId = tenantId(request);
     if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
@@ -1058,6 +1083,16 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     if (!requireTenant(request, reply, run.organizationId)) return reply;
     const result = await repository.getRunResult(run.organizationId, run.id);
     return reply.send({ runId: run.id, failures: result?.failures ?? [] });
+  });
+
+  app.get<{ Params: RunParams; Headers: TenantHeaders }>('/v1/runs/:runId/result', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const run = await repository.getRun(request.params.runId, organizationId);
+    if (run === undefined) return reply.code(404).send({ error: 'run not found' });
+    if (!requireTenant(request, reply, run.organizationId)) return reply;
+    const result = await repository.getRunResult(run.organizationId, run.id);
+    return result === undefined ? reply.code(404).send({ error: 'run result not found' }) : reply.send({ runId: run.id, result });
   });
 
   app.post<{ Params: RunParams; Headers: TenantHeaders; Body: ImportResultBody }>('/v1/runs/:runId/results/import', async (request, reply) => {
@@ -1337,6 +1372,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },
     '/v1/tests/{id}/manifest': { get: {}, put: {} },
+    '/v1/tests/{id}/manifest/versions': { get: {} },
     '/v1/tests/{id}/generated-code': { get: {} },
     '/v1/organizations/{organizationId}/change-requests': { get: {}, post: {} },
     '/v1/change-requests/{changeRequestId}': { get: {}, patch: {} },
@@ -1344,6 +1380,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/runs/{runId}': { get: {} },
     '/v1/runs/{runId}/report': { get: {} },
     '/v1/runs/{runId}/failures': { get: {} },
+    '/v1/runs/{runId}/result': { get: {} },
     '/v1/runs/{runId}/results/import': { post: {} },
     '/v1/runs/{runId}/steps/{stepId}': { get: {} },
     '/v1/runs/{runId}/compare/{baselineRunId}': { get: {} },

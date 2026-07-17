@@ -180,6 +180,9 @@ describe('OpenTestPilot server API', () => {
     const updatedManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { ...validManifest('login', 'Updated'), testId, manifestId: 'login' } });
     expect(updatedManifest.statusCode).toBe(200);
     expect((await app.inject({ method: 'GET', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId } })).json<{ name: string }>().name).toBe('Updated');
+    const versions = await app.inject({ method: 'GET', url: `/v1/tests/${testId}/manifest/versions`, headers: { 'x-organization-id': organizationId } });
+    expect(versions.statusCode).toBe(200);
+    expect(versions.json<{ versions: Array<{ version: number; manifest: { name: string } }> }>().versions[0]).toEqual(expect.objectContaining({ version: 2, manifest: expect.objectContaining({ name: 'Updated' }) }));
     const invalidManifest = await app.inject({ method: 'PUT', url: `/v1/tests/${testId}/manifest`, headers: { 'x-organization-id': organizationId }, payload: { schemaVersion: '1.0.0', id: 'login' } });
     expect(invalidManifest.statusCode).toBe(400);
     const generated = await app.inject({ method: 'GET', url: `/v1/tests/${testId}/generated-code`, headers: { 'x-organization-id': organizationId } });
@@ -401,6 +404,11 @@ describe('OpenTestPilot server API', () => {
     const failures = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/failures`, headers: { 'x-organization-id': organizationId } });
     expect(failures.statusCode).toBe(200);
     expect(failures.json<{ failures: Array<{ actionId: string }> }>().failures[0]?.actionId).toBe('assert-title');
+    const result = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/result`, headers: { 'x-organization-id': organizationId } });
+    expect(result.statusCode).toBe(200);
+    expect(result.json<{ result: { steps: Array<{ stepId: string }> } }>().result.steps[0]?.stepId).toBe('login');
+    const otherOrganizationId = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Other tenant' } })).json<{ id: string }>().id;
+    expect((await app.inject({ method: 'GET', url: `/v1/runs/${runId}/result`, headers: { 'x-organization-id': otherOrganizationId } })).statusCode).toBe(403);
     const step = await app.inject({ method: 'GET', url: `/v1/runs/${runId}/steps/login`, headers: { 'x-organization-id': organizationId } });
     expect(step.statusCode).toBe(200);
     expect(step.json<{ stepId: string }>().stepId).toBe('login');

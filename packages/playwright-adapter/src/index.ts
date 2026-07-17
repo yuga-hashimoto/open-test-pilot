@@ -11,10 +11,12 @@ export interface ExecuteManifestOptions {
   screenshotMode?: 'none' | 'failure-only' | 'after' | 'before-and-after';
   timeoutMs?: number;
   customActions?: Record<string, CustomActionExecutor>;
+  secretProviders?: Record<string, SecretValueProvider>;
 }
 
 export interface CustomActionContext { runId: string; getSecret(name: string): Promise<string | undefined>; writeArtifact(name: string, body: Uint8Array, contentType: string): Promise<string>; }
 export interface CustomActionExecutor { execute(context: CustomActionContext, input: Record<string, unknown>): Promise<unknown>; }
+export interface SecretValueProvider { get(name: string): Promise<string | undefined>; }
 
 function now(): string {
   return new Date().toISOString();
@@ -23,6 +25,7 @@ function now(): string {
 interface ExecutionContext {
   variables: Record<string, unknown>;
   stepOutputs: Record<string, unknown>;
+  secrets: Record<string, string>;
   writeArtifact(name: string, body: Uint8Array, contentType: string): Promise<string>;
   recordArtifact(type: string, relativePath: string): string;
 }
@@ -34,7 +37,7 @@ class ControlSignal extends Error {
 function resolveValue(value: string, manifest: Manifest, context: ExecutionContext): string {
   return value.replace(/\$\{(env|var|secret|steps):?\.?([A-Za-z_][A-Za-z0-9_.-]*)\}/g, (_token, namespace: string, name: string) => {
     if (namespace === 'env' || namespace === 'secret') {
-      return process.env[name] ?? '';
+      return namespace === 'secret' ? context.secrets[name] ?? process.env[name] ?? '' : process.env[name] ?? '';
     }
     if (namespace === 'steps') {
       const valueFromStep = name.split('.').reduce<unknown>((current, part) => current !== null && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined, context.stepOutputs);
@@ -313,7 +316,7 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
     case 'custom.action': {
       const executor = options.customActions?.[action.actionType ?? action.name ?? action.id];
       if (executor === undefined) throw new Error(`Custom Action is not registered: ${action.actionType ?? action.name ?? action.id}`);
-      context.stepOutputs[action.id] = await executor.execute({ runId: options.runId ?? 'local-run', getSecret: async (name) => process.env[name], writeArtifact: context.writeArtifact }, (resolveAny(action.input ?? {}, manifest, context) as Record<string, unknown>));
+      context.stepOutputs[action.id] = await executor.execute({ runId: options.runId ?? 'local-run', getSecret: async (name) => context.secrets[name] ?? process.env[name], writeArtifact: context.writeArtifact }, (resolveAny(action.input ?? {}, manifest, context) as Record<string, unknown>));
       return;
     }
     case 'mobile.launch':
@@ -353,6 +356,7 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
   const executionContext: ExecutionContext = {
     variables: {},
     stepOutputs: {},
+    secrets: await resolveManifestSecrets(manifest, options.secretProviders),
     writeArtifact: async (name, body, contentType) => {
       const relativePath = name.replaceAll('\\', '/').replace(/^\/+/, '');
       if (relativePath.split('/').includes('..')) throw new Error('custom artifact path must stay within the run directory');
@@ -468,4 +472,14 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
     steps,
     artifacts,
   };
+}
+
+async function resolveManifestSecrets(manifest: Manifest, providers: Record<string, SecretValueProvider> | undefined): Promise<Record<string, string>> {
+  const values: Record<string, string> = {};
+  for (const secret of manifest.secrets) {
+    const provider = providers?.[secret.provider];
+    const value = provider === undefined ? process.env[secret.name] ?? process.env[secret.reference] : await provider.get(secret.reference);
+    if (value !== undefined) values[secret.name] = value;
+  }
+  return values;
 }

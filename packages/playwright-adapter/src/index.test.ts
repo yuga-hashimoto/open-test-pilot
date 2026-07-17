@@ -126,4 +126,59 @@ describe('executeManifest', () => {
     expect(await readFile('.testpilot/custom-flow/custom.txt', 'utf8')).toBe('custom artifact');
     expect(result.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'custom', path: 'custom.txt' })]));
   });
+
+  it('resolves Manifest secret references through the configured provider at execution time', async () => {
+    let receivedAuthorization: string | undefined;
+    const server: Server = createServer((request, response) => {
+      receivedAuthorization = request.headers.authorization;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('secret test server did not bind');
+    try {
+      const result = await executeManifest({
+        ...manifest,
+        id: 'provider-secret',
+        secrets: [{ name: 'TEST_API_TOKEN', provider: 'vault', reference: 'secret/data/test-api' }],
+        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TEST_API_TOKEN}' }, expectedStatus: 200, jsonAssertions: { ok: true } }] }],
+      }, {
+        outputDir: '.testpilot/provider-secret',
+        secretProviders: { vault: { async get(reference) { expect(reference).toBe('secret/data/test-api'); return 'provider-token'; } } },
+      });
+      expect(result.status).toBe('passed');
+      expect(receivedAuthorization).toBe('Bearer provider-token');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+    }
+  });
+
+  it('resolves an env-backed Manifest secret by its declared name', async () => {
+    const previous = process.env['TESTPILOT_ENV_SECRET'];
+    process.env['TESTPILOT_ENV_SECRET'] = 'env-token';
+    let receivedAuthorization: string | undefined;
+    const server: Server = createServer((request, response) => {
+      receivedAuthorization = request.headers.authorization;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('env secret test server did not bind');
+    try {
+      const result = await executeManifest({
+        ...manifest,
+        id: 'env-secret',
+        secrets: [{ name: 'TESTPILOT_ENV_SECRET', provider: 'env', reference: '${secret:TESTPILOT_ENV_SECRET}' }],
+        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TESTPILOT_ENV_SECRET}' }, expectedStatus: 200, jsonAssertions: { ok: true } }] }],
+      }, { outputDir: '.testpilot/env-secret', screenshotMode: 'none' });
+      expect(result.status).toBe('passed');
+      expect(receivedAuthorization).toBe('Bearer env-token');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      if (previous === undefined) delete process.env['TESTPILOT_ENV_SECRET'];
+      else process.env['TESTPILOT_ENV_SECRET'] = previous;
+    }
+  });
 });

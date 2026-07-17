@@ -5,7 +5,7 @@ describe('web API client', () => {
   it('requires tenant config and sends tenant headers for live calls', async () => {
     expect(getApiConfig({})).toBeUndefined();
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const api = createApi({ baseUrl: 'http://server.test', organizationId: 'org-1' }, async (input, init) => { const call: { url: string; init?: RequestInit } = { url: String(input) }; if (init !== undefined) call.init = init; calls.push(call); const url = String(input); const body = url.endsWith('/schedules') ? { schedules: [] } : url.endsWith('/manifest') ? { id: 'login', schemaVersion: '1.0.0' } : url.endsWith('/repositories') ? { repositories: [] } : url.endsWith('/change-requests') ? { changeRequests: [] } : url.endsWith('/failures') ? { failures: [] } : url.endsWith('/artifacts') ? { artifacts: [] } : url.endsWith('/report') ? { runId: 'run-1', status: 'passed', reportUrl: '/report' } : url.includes('/tests/') ? { id: 'test-1', projectId: 'project-1', name: 'Login', manifestId: 'login', createdAt: new Date().toISOString() } : { tests: [] }; return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }); });
+    const api = createApi({ baseUrl: 'http://server.test', organizationId: 'org-1' }, async (input, init) => { const call: { url: string; init?: RequestInit } = { url: String(input) }; if (init !== undefined) call.init = init; calls.push(call); const url = String(input); const body = url.endsWith('/schedules') ? { schedules: [] } : url.endsWith('/manifest/versions') ? { testId: 'test-1', versions: [] } : url.endsWith('/manifest') ? { id: 'login', schemaVersion: '1.0.0' } : url.endsWith('/repositories') ? { repositories: [] } : url.endsWith('/change-requests') ? { changeRequests: [] } : url.endsWith('/failures') ? { failures: [] } : url.endsWith('/result') ? { runId: 'run-1', result: { failures: [], steps: [] } } : url.endsWith('/artifacts') ? { artifacts: [] } : url.endsWith('/report') ? { runId: 'run-1', status: 'passed', reportUrl: '/report' } : url.includes('/tests/') ? { id: 'test-1', projectId: 'project-1', name: 'Login', manifestId: 'login', createdAt: new Date().toISOString() } : { tests: [] }; return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }); });
     await api.listTests();
     await api.listSchedules();
     expect(calls[0]?.url).toBe('http://server.test/v1/organizations/org-1/tests');
@@ -13,20 +13,24 @@ describe('web API client', () => {
     expect(calls[1]?.url).toBe('http://server.test/v1/organizations/org-1/schedules');
     await api.getTest('test-1');
     await api.getManifest('test-1');
+    await api.listManifestVersions('test-1');
     await api.updateManifest('test-1', { id: 'login', schemaVersion: '1.0.0' });
     await api.listRepositories();
     await api.listChangeRequests();
     await api.createChangeRequest('Add login coverage', 'Generated from source analysis');
     await api.updateChangeRequest('change-request-1', { status: 'approved' });
     await api.getRunFailures('run-1');
+    await api.getRunResult('run-1');
     await api.listArtifacts('run-1');
     await api.getReport('run-1');
     expect(calls.map((call) => call.url)).toEqual(expect.arrayContaining([
       'http://server.test/v1/tests/test-1',
       'http://server.test/v1/tests/test-1/manifest',
+      'http://server.test/v1/tests/test-1/manifest/versions',
       'http://server.test/v1/organizations/org-1/repositories',
       'http://server.test/v1/organizations/org-1/change-requests',
       'http://server.test/v1/runs/run-1/failures',
+      'http://server.test/v1/runs/run-1/result',
       'http://server.test/v1/runs/run-1/artifacts',
       'http://server.test/v1/runs/run-1/report',
     ]));

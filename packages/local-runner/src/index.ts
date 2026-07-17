@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { executeMobileManifest, type MobileDriver } from '@open-test-pilot/appium-adapter';
 import { generateMobileAppium, generatePlaywright } from '@open-test-pilot/generator';
 import type { Manifest } from '@open-test-pilot/manifest-schema';
-import { executeManifest, type CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
+import { executeManifest, type CustomActionExecutor, type SecretValueProvider } from '@open-test-pilot/playwright-adapter';
 import { renderReport } from '@open-test-pilot/report';
 import type { TestRunResult } from '@open-test-pilot/result-schema';
 
@@ -12,6 +12,7 @@ export interface RunLocalOptions {
   screenshotMode?: 'none' | 'failure-only' | 'after' | 'before-and-after';
   timeoutMs?: number;
   customActions?: Record<string, CustomActionExecutor>;
+  secretProviders?: Record<string, SecretValueProvider>;
   customActionModule?: string;
   mobileDriver?: MobileDriver;
 }
@@ -44,6 +45,7 @@ export async function runLocal(manifest: Manifest, options: RunLocalOptions = {}
     ...(options.screenshotMode === undefined ? {} : { screenshotMode: options.screenshotMode }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.customActions === undefined ? {} : { customActions: options.customActions }),
+    ...(options.secretProviders === undefined ? {} : { secretProviders: options.secretProviders }),
   };
   const result: TestRunResult = isMobile
     ? await runMobileManifest(manifest, runId, runDir, options.mobileDriver)
