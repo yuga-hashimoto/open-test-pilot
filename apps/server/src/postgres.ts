@@ -66,6 +66,11 @@ export class PostgresTenantRepository implements TenantRepository {
     return result.rows[0]?.exists ?? false;
   }
 
+  async listOrganizationsForUser(userId: string): Promise<Organization[]> {
+    const result = await this.pool.query<{ id: string; name: string; created_at: Date }>('SELECT o.id, o.name, o.created_at FROM organizations o INNER JOIN organization_memberships om ON om.organization_id = o.id WHERE om.user_id = $1 ORDER BY o.created_at, o.id', [userId]);
+    return result.rows.map(organizationFromRow);
+  }
+
   async listOrganizationMembers(organizationId: string): Promise<OrganizationMemberRecord[]> {
     return this.tenantQuery(organizationId, async (client) => {
       const result = await client.query<{ organization_id: string; user_id: string; github_user_id: string; login: string; role: string; created_at: Date }>('SELECT om.organization_id, om.user_id, u.github_user_id, u.login, om.role, om.created_at FROM organization_memberships om INNER JOIN users u ON u.id = om.user_id WHERE om.organization_id = $1 ORDER BY om.created_at, om.user_id', [organizationId]);

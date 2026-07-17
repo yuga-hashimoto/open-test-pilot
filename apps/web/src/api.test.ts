@@ -1,7 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { createApi, getApiConfig } from './api.js';
+import { createApi, createAuthApi, getApiConfig, getApiServerBaseUrl } from './api.js';
 
 describe('web API client', () => {
+  it('supports OAuth start, callback completion, and tenant bootstrap without exposing GitHub tokens', async () => {
+    expect(getApiServerBaseUrl({ VITE_OPENTESTPILOT_URL: 'https://pilot.test/' })).toBe('https://pilot.test');
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const auth = createAuthApi('https://pilot.test', async (input, init) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      const url = String(input);
+      const body = url.includes('/auth/github/start')
+        ? { authorizationUrl: 'https://github.com/login/oauth/authorize?state=state-1' }
+        : url.includes('/auth/github/callback')
+          ? { authenticated: true, sessionToken: 'session-1', expiresAt: '2030-01-01T00:00:00.000Z', login: 'qa-user', scope: 'read:user' }
+          : url.endsWith('/me/organizations')
+            ? { organizations: [{ id: 'org-1', name: 'QA', createdAt: '2026-01-01T00:00:00.000Z' }] }
+            : { id: 'org-2', name: 'New QA', createdAt: '2026-01-02T00:00:00.000Z' };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await expect(auth.startLogin('http://localhost:4173/auth/github/callback')).resolves.toMatchObject({ authorizationUrl: expect.stringContaining('state=') });
+    await expect(auth.completeLogin('code/1', 'state/1')).resolves.toMatchObject({ login: 'qa-user' });
+    await expect(auth.listOrganizations('session-1')).resolves.toEqual([expect.objectContaining({ id: 'org-1' })]);
+    await expect(auth.createOrganization('session-1', 'New QA')).resolves.toMatchObject({ id: 'org-2' });
+    expect(calls[2]?.init?.headers).toMatchObject({ authorization: 'Bearer session-1' });
+    expect(calls[3]?.init?.headers).toMatchObject({ authorization: 'Bearer session-1' });
+    expect(calls[3]?.init?.body).toBe(JSON.stringify({ name: 'New QA' }));
+  });
+
   it('requires tenant config and sends tenant headers for live calls', async () => {
     expect(getApiConfig({})).toBeUndefined();
     const calls: Array<{ url: string; init?: RequestInit }> = [];

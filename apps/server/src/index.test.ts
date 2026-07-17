@@ -70,6 +70,28 @@ describe('OpenTestPilot server API', () => {
     }
   });
 
+  it('lists and creates organizations for the authenticated GitHub user', async () => {
+    process.env['AUTH_REQUIRED'] = 'true';
+    try {
+      const repository = new InMemoryTenantRepository();
+      const app = buildServer(repository);
+      const user = repository.upsertGitHubUser('456', 'org-owner');
+      const session = repository.createAuthSession(user.id, new Date(Date.now() + 60_000).toISOString());
+      const existing = repository.createOrganization('Existing QA');
+      repository.addOrganizationMembership(existing.id, user.id, 'owner');
+      const listed = await app.inject({ method: 'GET', url: '/v1/me/organizations', headers: { authorization: `Bearer ${session.token}` } });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json<{ organizations: Array<{ id: string; name: string }> }>().organizations).toEqual([expect.objectContaining({ id: existing.id, name: 'Existing QA' })]);
+      const created = await app.inject({ method: 'POST', url: '/v1/organizations', headers: { authorization: `Bearer ${session.token}` }, payload: { name: 'Created QA' } });
+      expect(created.statusCode).toBe(201);
+      const createdId = created.json<{ id: string }>().id;
+      expect(await repository.isOrganizationMember(createdId, user.id)).toBe(true);
+      await app.close();
+    } finally {
+      delete process.env['AUTH_REQUIRED'];
+    }
+  });
+
   it('stores secret metadata without exposing values and supports rotation', async () => {
     const repository = new InMemoryTenantRepository();
     const app = buildServer(repository);

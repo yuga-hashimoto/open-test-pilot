@@ -215,6 +215,7 @@ export interface TenantRepository {
   getAuthSession(token: string): MaybePromise<{ userId: string; expiresAt: string } | undefined>;
   addOrganizationMembership(organizationId: string, userId: string, role: string): MaybePromise<void>;
   isOrganizationMember(organizationId: string, userId: string): MaybePromise<boolean>;
+  listOrganizationsForUser(userId: string): MaybePromise<Organization[]>;
   listOrganizationMembers(organizationId: string): MaybePromise<OrganizationMemberRecord[]>;
   getStoragePolicy(organizationId: string): MaybePromise<StoragePolicyRecord>;
   updateStoragePolicy(organizationId: string, patch: Partial<Omit<StoragePolicyRecord, 'organizationId' | 'updatedAt'>>): MaybePromise<StoragePolicyRecord>;
@@ -299,6 +300,13 @@ export class InMemoryTenantRepository implements TenantRepository {
 
   isOrganizationMember(organizationId: string, userId: string): boolean {
     return this.memberships.has(`${organizationId}:${userId}`);
+  }
+
+  listOrganizationsForUser(userId: string): Organization[] {
+    return [...this.memberships.values()]
+      .filter((member) => member.userId === userId)
+      .map((member) => this.organizations.get(member.organizationId))
+      .filter((organization): organization is Organization => organization !== undefined);
   }
 
   listOrganizationMembers(organizationId: string): OrganizationMemberRecord[] { return [...this.memberships.values()].filter((member) => member.organizationId === organizationId); }
@@ -726,6 +734,12 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     const userId = authenticatedUsers.get(request);
     if (userId !== undefined) await repository.addOrganizationMembership(organization.id, userId, 'owner');
     return reply.code(201).send(organization);
+  });
+
+  app.get('/v1/me/organizations', async (request, reply) => {
+    const userId = authenticatedUsers.get(request);
+    if (userId === undefined) return reply.code(401).send({ error: 'GitHub OAuth session required' });
+    return reply.send({ organizations: await repository.listOrganizationsForUser(userId) });
   });
 
   app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId', async (request, reply) => {
@@ -1534,6 +1548,7 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
 
   app.get('/openapi.json', async (_request, reply) => reply.send({ openapi: '3.1.0', info: { title: 'OpenTestPilot API', version: '0.1.0' }, paths: Object.fromEntries(Object.entries({
     '/v1/organizations': { post: {} },
+    '/v1/me/organizations': { get: {} },
     '/v1/organizations/{organizationId}': { get: {} },
     '/v1/organizations/{organizationId}/projects': { get: {}, post: {} },
     '/v1/organizations/{organizationId}/members': { get: {} },

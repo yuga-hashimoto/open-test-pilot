@@ -71,9 +71,40 @@ export interface TestPilotApi {
 }
 
 export interface ApiConfig { baseUrl: string; organizationId: string; projectId?: string; testId?: string; sessionToken?: string; }
+export interface ApiOrganization { id: string; name: string; createdAt: string; }
+
+export interface LoginStartResult { authorizationUrl: string; }
+export interface LoginCompleteResult { authenticated: boolean; sessionToken: string; expiresAt: string; login: string; scope: string; }
+
+export function getApiServerBaseUrl(env: Record<string, string | undefined> = import.meta.env): string | undefined {
+  const baseUrl = env['VITE_OPENTESTPILOT_URL'];
+  return baseUrl === undefined ? undefined : baseUrl.replace(/\/$/, '');
+}
+
+export function createAuthApi(baseUrl: string, fetcher: typeof fetch = fetch) {
+  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetcher(`${baseUrl}${path}`, init);
+    if (!response.ok) throw new Error(`Auth API returned ${response.status}`);
+    return await response.json() as T;
+  }
+  return {
+    async startLogin(redirectUri: string): Promise<LoginStartResult> {
+      return await request<LoginStartResult>(`/auth/github/start?redirectUri=${encodeURIComponent(redirectUri)}`);
+    },
+    async completeLogin(code: string, state: string): Promise<LoginCompleteResult> {
+      return await request<LoginCompleteResult>(`/auth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`);
+    },
+    async listOrganizations(sessionToken: string): Promise<ApiOrganization[]> {
+      return (await request<{ organizations: ApiOrganization[] }>('/v1/me/organizations', { headers: { authorization: `Bearer ${sessionToken}` } })).organizations;
+    },
+    async createOrganization(sessionToken: string, name: string): Promise<ApiOrganization> {
+      return await request<ApiOrganization>('/v1/organizations', { method: 'POST', headers: { authorization: `Bearer ${sessionToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    },
+  };
+}
 
 export function getApiConfig(env: Record<string, string | undefined> = import.meta.env): ApiConfig | undefined {
-  const baseUrl = env['VITE_OPENTESTPILOT_URL'];
+  const baseUrl = getApiServerBaseUrl(env);
   const organizationId = env['VITE_OPENTESTPILOT_ORGANIZATION_ID'];
   if (baseUrl === undefined || organizationId === undefined) return undefined;
   return { baseUrl: baseUrl.replace(/\/$/, ''), organizationId, ...(env['VITE_OPENTESTPILOT_PROJECT_ID'] === undefined ? {} : { projectId: env['VITE_OPENTESTPILOT_PROJECT_ID'] }), ...(env['VITE_OPENTESTPILOT_TEST_ID'] === undefined ? {} : { testId: env['VITE_OPENTESTPILOT_TEST_ID'] }), ...(env['VITE_OPENTESTPILOT_SESSION_TOKEN'] === undefined ? {} : { sessionToken: env['VITE_OPENTESTPILOT_SESSION_TOKEN'] }) };

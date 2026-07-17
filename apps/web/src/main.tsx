@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Editor } from "@monaco-editor/react";
 import { generatePlaywright } from "@open-test-pilot/generator";
@@ -6,7 +6,9 @@ import type { Manifest } from "@open-test-pilot/manifest-schema";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   createApi,
+  createAuthApi,
   getApiConfig,
+  getApiServerBaseUrl,
   type ApiAiWorker,
   type ApiAiWorkerJob,
   type ApiAuditEvent,
@@ -26,6 +28,8 @@ import {
   type ApiTest,
   type ApiTestManifest,
   type ApiManifestVersion,
+  type ApiOrganization,
+  type LoginCompleteResult,
   type TestPilotApi,
 } from "./api.js";
 import "./style.css";
@@ -104,11 +108,148 @@ function StatusPill({ status }: { status: Status }) {
   );
 }
 
-function App() {
+const SESSION_KEY = "opentestpilot-session";
+type StoredLoginSession = LoginCompleteResult & { organizationId?: string };
+function getStoredSession(): StoredLoginSession | undefined {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw === null) return undefined;
+    return JSON.parse(raw) as StoredLoginSession;
+  } catch { return undefined; }
+}
+function storeSession(session: StoredLoginSession) { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
+function clearSession() { localStorage.removeItem(SESSION_KEY); }
+
+function LoginPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin: (session: LoginCompleteResult) => void; }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>();
+  const startLogin = () => {
+    setLoading(true);
+    setError(undefined);
+    const redirectUri = `${window.location.origin}/auth/github/callback`;
+    void createAuthApi(serverBaseUrl).startLogin(redirectUri)
+      .then((result) => { window.location.href = result.authorizationUrl; })
+      .catch((e) => { setError(e instanceof Error ? e.message : "Failed to start login"); setLoading(false); });
+  };
+  return (
+    <div className="login-root">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-mark">O</div>
+          <div>
+            <strong>OpenTestPilot</strong>
+            <small>QA control plane</small>
+          </div>
+        </div>
+        <h1>Sign in</h1>
+        <p>Connect your GitHub account to access the team dashboard.</p>
+        <button className="login-github-button" onClick={startLogin} disabled={loading}>
+          <span className="login-github-icon" aria-hidden="true" />
+          {loading ? "Redirecting to GitHub…" : "Sign in with GitHub"}
+        </button>
+        {error !== undefined && <span className="login-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+function CallbackPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin: (session: LoginCompleteResult) => void; }) {
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    if (code === null || state === null) { setError("Missing OAuth callback parameters. Please try signing in again."); return; }
+    void createAuthApi(serverBaseUrl).completeLogin(code, state)
+      .then((session) => { storeSession(session); onLogin(session); })
+      .catch((e) => { setError(e instanceof Error ? e.message : "Failed to complete login"); });
+  }, [serverBaseUrl, onLogin]);
+  if (error !== undefined) {
+    return (
+      <div className="login-root">
+        <div className="login-card">
+          <div className="login-brand">
+            <div className="login-brand-mark">O</div>
+            <div><strong>OpenTestPilot</strong></div>
+          </div>
+          <h1>Sign in failed</h1>
+          <p>{error}</p>
+          <button className="login-github-button" onClick={() => { window.location.href = "/"; }}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="login-root">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-mark">O</div>
+          <div><strong>OpenTestPilot</strong></div>
+        </div>
+        <h1>Completing sign in…</h1>
+        <p>Exchanging authorization code for a session token.</p>
+      </div>
+    </div>
+  );
+}
+
+function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl: string; session: StoredLoginSession; onSelect: (organizationId: string) => void }) {
+  const [organizations, setOrganizations] = useState<ApiOrganization[]>([]);
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  const authApi = useMemo(() => createAuthApi(serverBaseUrl), [serverBaseUrl]);
+  const load = useCallback(() => {
+    setLoading(true);
+    void authApi.listOrganizations(session.sessionToken)
+      .then(setOrganizations)
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to load organizations"))
+      .finally(() => setLoading(false));
+  }, [authApi, session.sessionToken]);
+  useEffect(() => { load(); }, [load]);
+  const create = () => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    setLoading(true);
+    void authApi.createOrganization(session.sessionToken, trimmed)
+      .then((organization) => onSelect(organization.id))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to create organization"))
+      .finally(() => setLoading(false));
+  };
+  return (
+    <div className="login-root">
+      <div className="login-card">
+        <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong><small>QA control plane</small></div></div>
+        <h1>Select an organization</h1>
+        <p>Choose a workspace for your GitHub account, or create one to start syncing repositories.</p>
+        {organizations.map((organization) => <button key={organization.id} className="login-github-button organization-choice" onClick={() => onSelect(organization.id)}>{organization.name}</button>)}
+        <div className="organization-create">
+          <input aria-label="Organization name" value={name} onChange={(event) => setName(event.target.value)} placeholder="New organization" />
+          <button className="login-github-button" onClick={create} disabled={loading || name.trim().length === 0}>Create</button>
+        </div>
+        {loading && organizations.length === 0 && <p>Loading organizations…</p>}
+        {error !== undefined && <span className="login-error">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
+function App({ sessionToken, login, organizationId, serverBaseUrl, onLogout }: { sessionToken?: string | undefined; login?: string | undefined; organizationId?: string | undefined; serverBaseUrl?: string | undefined; onLogout?: (() => void) | undefined }) {
   const api = useMemo<TestPilotApi | undefined>(() => {
     const config = getApiConfig();
-    return config === undefined ? undefined : createApi(config);
-  }, []);
+    const resolvedOrganizationId = organizationId ?? config?.organizationId;
+    const resolvedBaseUrl = serverBaseUrl ?? config?.baseUrl;
+    if (resolvedOrganizationId === undefined || resolvedBaseUrl === undefined) return undefined;
+    return createApi({
+      baseUrl: resolvedBaseUrl,
+      organizationId: resolvedOrganizationId,
+      ...(config?.projectId === undefined ? {} : { projectId: config.projectId }),
+      ...(config?.testId === undefined ? {} : { testId: config.testId }),
+      ...(sessionToken === undefined ? {} : { sessionToken }),
+    });
+  }, [organizationId, serverBaseUrl, sessionToken]);
   const [active, setActive] = useState("Overview");
   const [runs, setRuns] = useState<Run[]>(demoRuns);
   const [tests, setTests] = useState<ApiTest[]>([]);
@@ -361,12 +502,17 @@ function App() {
           <span>Settings</span>
         </button>
         <div className="profile">
-          <div className="profile-avatar">YK</div>
+          <div className="profile-avatar">{login !== undefined ? login.slice(0, 2).toUpperCase() : "YK"}</div>
           <div>
-            <b>Yu-ga Kato</b>
-            <small>Owner</small>
+            <b>{login ?? "Yu-ga Kato"}</b>
+            <small>{login !== undefined ? "GitHub" : "Owner"}</small>
           </div>
-          <Icon name="more" />
+          {onLogout !== undefined && (
+            <button className="logout-button" onClick={onLogout} title="Sign out">
+              <Icon name="more" />
+            </button>
+          )}
+          {onLogout === undefined && <Icon name="more" />}
         </div>
       </aside>
       <main className="main-content">
@@ -2527,4 +2673,50 @@ function relativeTime(value: string): string {
   return seconds < 60 ? "Now" : `${Math.floor(seconds / 60)}m ago`;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+function Root() {
+  const serverBaseUrl = useMemo(() => getApiServerBaseUrl(), []);
+  const config = useMemo(() => getApiConfig(), []);
+  const authRequired = import.meta.env["VITE_OPENTESTPILOT_AUTH_REQUIRED"] === "true";
+  const [session, setSession] = useState<StoredLoginSession | undefined>(() => {
+    if (config?.sessionToken !== undefined) return undefined;
+    const stored = getStoredSession();
+    if (stored !== undefined && stored.expiresAt !== undefined && new Date(stored.expiresAt) <= new Date()) { clearSession(); return undefined; }
+    return stored;
+  });
+  const handleLogin = useCallback((result: LoginCompleteResult) => {
+    storeSession(result);
+    setSession(result);
+    window.history.replaceState({}, "", "/");
+  }, []);
+  const handleOrganization = useCallback((organizationId: string) => {
+    setSession((current) => {
+      if (current === undefined) return current;
+      const updated = { ...current, organizationId };
+      storeSession(updated);
+      return updated;
+    });
+  }, []);
+  const handleLogout = useCallback(() => { clearSession(); setSession(undefined); }, []);
+  if (window.location.pathname === "/auth/github/callback") {
+    if (serverBaseUrl === undefined) {
+      return (
+        <div className="login-root">
+          <div className="login-card">
+            <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong></div></div>
+            <h1>Server not configured</h1>
+            <p>VITE_OPENTESTPILOT_URL is not set. Configure the server URL to enable OAuth login.</p>
+            <button className="login-github-button" onClick={() => { window.location.href = "/"; }}>Back</button>
+          </div>
+        </div>
+      );
+    }
+    return <CallbackPage serverBaseUrl={serverBaseUrl} onLogin={handleLogin} />;
+  }
+  if (serverBaseUrl === undefined) return <App />;
+  if (session === undefined && config?.sessionToken === undefined && (authRequired || config?.organizationId === undefined)) return <LoginPage serverBaseUrl={serverBaseUrl} onLogin={handleLogin} />;
+  const organizationId = config?.organizationId ?? session?.organizationId;
+  if (organizationId === undefined && session !== undefined) return <OrganizationPage serverBaseUrl={serverBaseUrl} session={session} onSelect={handleOrganization} />;
+  return <App sessionToken={session?.sessionToken ?? config?.sessionToken} login={session?.login} organizationId={organizationId} serverBaseUrl={serverBaseUrl} onLogout={session === undefined ? undefined : handleLogout} />;
+}
+
+createRoot(document.getElementById("root")!).render(<Root />);
