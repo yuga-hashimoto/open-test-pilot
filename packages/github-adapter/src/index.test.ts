@@ -55,7 +55,7 @@ describe('GitHub adapter', () => {
     const client = new GitHubApiClient('installation-token', async (input) => {
       const url = String(input);
       requests.push(url);
-      const body = url.includes('/compare/') ? { status: 'ahead', ahead_by: 2, behind_by: 0, html_url: 'https://github.com/org/repo/compare/main...repair', files: [{ filename: 'tests/login.yaml', status: 'modified', additions: 3, deletions: 1, changes: 4 }] } : { branches: [{ name: 'main', commit: { sha: 'base-sha' } }, { name: 'repair', commit: { sha: 'head-sha' } }] };
+      const body = url.includes('/compare/') ? { status: 'ahead', ahead_by: 2, behind_by: 0, html_url: 'https://github.com/org/repo/compare/main...repair', files: [{ filename: 'tests/login.yaml', status: 'modified', additions: 3, deletions: 1, changes: 4 }] } : [{ name: 'main', commit: { sha: 'base-sha' } }, { name: 'repair', commit: { sha: 'head-sha' } }];
       return new Response(JSON.stringify(body), { status: 200 });
     });
     await expect(client.listBranches('org', 'repo')).resolves.toEqual([{ name: 'main', sha: 'base-sha' }, { name: 'repair', sha: 'head-sha' }]);

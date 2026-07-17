@@ -130,8 +130,8 @@ export class GitHubApiClient {
   }
 
   public async listBranches(owner: string, repository: string): Promise<GitHubBranch[]> {
-    const body = await this.request<{ branches?: Array<{ name?: string; commit?: { sha?: string } }> }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100`, { method: 'GET' });
-    return (body.branches ?? []).flatMap((branch) => branch.name === undefined || branch.commit?.sha === undefined ? [] : [{ name: branch.name, sha: branch.commit.sha }]);
+    const body = await this.request<Array<{ name?: string; commit?: { sha?: string } }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100`, { method: 'GET' });
+    return body.flatMap((branch) => branch.name === undefined || branch.commit?.sha === undefined ? [] : [{ name: branch.name, sha: branch.commit.sha }]);
   }
 
   public async compareBranches(owner: string, repository: string, base: string, head: string): Promise<GitHubBranchComparison> {
