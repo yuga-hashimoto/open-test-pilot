@@ -29,4 +29,21 @@ describe('source analyzer', () => {
     expect(generated.manifest.setup[0]?.actions[0]?.type).toBe('web.goto');
     expect(generated.manifest.steps[0]?.actions.some((action) => action.type === 'api.request')).toBe(true);
   });
+
+  it('generates API actions for OpenAPI, Swagger, Postman, GraphQL, and client calls', () => {
+    const sources = [
+      { path: 'openapi.yaml', platform: 'api' as const, framework: 'openapi' as const, content: 'openapi: "3.0.0"\npaths:\n  /users:\n    get:\n      operationId: listUsers' },
+      { path: 'swagger.yaml', platform: 'api' as const, framework: 'swagger' as const, content: 'swagger: "2.0"\npaths:\n  /users:\n    get:' },
+      { path: 'collection.json', platform: 'api' as const, framework: 'postman' as const, content: '{ "item": [{ "request": { "method": "POST", "url": "/users" } }] }' },
+      { path: 'schema.graphql', platform: 'api' as const, framework: 'graphql' as const, content: 'type Query { users: [User!]! }' },
+      { path: 'client.ts', platform: 'api' as const, content: 'await fetch("/users"); axios.post("/users", body);' },
+    ];
+    for (const source of sources) {
+      const generated = generateManifestFromSource(source, { baseUrl: 'http://api.test' });
+      expect(generated.findings.length, source.path).toBeGreaterThan(0);
+      const apiActions = generated.manifest.steps.flatMap((step) => step.actions).filter((action) => action.type === 'api.request');
+      expect(apiActions.length, source.path).toBeGreaterThan(0);
+      if (source.path === 'openapi.yaml' || source.path === 'swagger.yaml' || source.path === 'collection.json') expect(apiActions.some((action) => action.url?.endsWith('/users')), source.path).toBe(true);
+    }
+  });
 });

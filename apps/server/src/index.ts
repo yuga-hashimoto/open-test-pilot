@@ -538,6 +538,8 @@ interface CreateScheduleBody { projectId: string; testId: string; cron: string; 
 export interface ScheduleRecord { id: string; organizationId: string; projectId: string; testId: string; cron: string; enabled: boolean; createdAt: string }
 interface CreateArtifactBody { key: string; contentType: string; bodyBase64: string }
 interface CreateRepositoryBody { owner: string; name: string; provider?: string; installationId?: number }
+interface CreateGitHubBranchBody { branch: string; baseSha: string }
+interface CommitGitHubFileBody { branch: string; path: string; content: string; message: string; sha?: string }
 interface CreateGitHubPullRequestBody { title: string; head: string; base?: string; body?: string; draft?: boolean }
 interface PublishGitHubRunBody { repositoryId: string; headSha: string; issueNumber?: number; comment?: string }
 export interface ChangeRequestRecord { id: string; organizationId: string; title: string; description: string; status: 'open' | 'approved' | 'rejected'; createdAt: string; updatedAt: string }
@@ -869,6 +871,52 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
       const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
       const comparison = await new GitHubApiClient(installationToken.token).compareBranches(record.owner, record.name, request.query.base.trim(), request.query.head.trim());
       return reply.send({ repositoryId: record.id, base: request.query.base.trim(), head: request.query.head.trim(), comparison });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post<{ Params: { repositoryId: string }; Headers: TenantHeaders; Body: CreateGitHubBranchBody }>('/v1/repositories/:repositoryId/branches', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support branch creation' });
+    const body = request.body;
+    if (typeof body?.branch !== 'string' || body.branch.trim() === '' || typeof body.baseSha !== 'string' || body.baseSha.trim() === '') return reply.code(400).send({ error: 'branch and baseSha are required' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App branch creation is not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      await new GitHubApiClient(installationToken.token).createBranch(record.owner, record.name, body.branch.trim(), body.baseSha.trim());
+      await repository.recordAuditEvent(organizationId, 'github.branch_created', 'repository', record.id, { branch: body.branch.trim(), baseSha: body.baseSha.trim() });
+      return reply.code(201).send({ repositoryId: record.id, branch: body.branch.trim(), baseSha: body.baseSha.trim() });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.put<{ Params: { repositoryId: string }; Headers: TenantHeaders; Body: CommitGitHubFileBody }>('/v1/repositories/:repositoryId/contents', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support commits' });
+    const body = request.body;
+    if (typeof body?.branch !== 'string' || body.branch.trim() === '' || typeof body.path !== 'string' || body.path.trim() === '' || typeof body.content !== 'string' || typeof body.message !== 'string' || body.message.trim() === '') return reply.code(400).send({ error: 'branch, path, content, and message are required' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App commits are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const commit = await new GitHubApiClient(installationToken.token).commitFile(record.owner, record.name, { branch: body.branch.trim(), path: body.path.trim(), content: body.content, message: body.message.trim(), ...(body.sha === undefined ? {} : { sha: body.sha }) });
+      await repository.recordAuditEvent(organizationId, 'github.commit_created', 'repository', record.id, { branch: body.branch.trim(), path: body.path.trim(), commitSha: commit.commitSha });
+      return reply.code(201).send({ repositoryId: record.id, path: body.path.trim(), branch: body.branch.trim(), commitSha: commit.commitSha });
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -1282,8 +1330,9 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
     '/v1/repositories/{repositoryId}': { get: {} },
     '/v1/repositories/{repositoryId}/sync': { post: {} },
-    '/v1/repositories/{repositoryId}/branches': { get: {} },
     '/v1/repositories/{repositoryId}/compare': { get: {} },
+    '/v1/repositories/{repositoryId}/branches': { get: {}, post: {} },
+    '/v1/repositories/{repositoryId}/contents': { put: {} },
     '/v1/repositories/{repositoryId}/pull-requests': { post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },

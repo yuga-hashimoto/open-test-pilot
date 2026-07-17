@@ -563,6 +563,41 @@ describe('repository persistence and sync', () => {
     expect(comparison.statusCode).toBe(503);
     await app.close();
   });
+
+  it('creates GitHub branches and commits through the App installation token', async () => {
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const keyPath = join(tmpdir(), `testpilot-branch-commit-${Date.now()}.pem`);
+    await writeFile(keyPath, privateKeyPem);
+    process.env['GITHUB_APP_ID'] = '67890';
+    process.env['GITHUB_PRIVATE_KEY_PATH'] = keyPath;
+    process.env['GITHUB_INSTALLATION_ID'] = '456';
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'Branch Commit Org' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'owner', name: 'repo' } })).json<{ id: string }>();
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      const url = String(input);
+      const body = url.includes('access_tokens') ? { token: 'ghs_branch_commit', expires_at: '2026-12-31T23:59:59Z' } : url.includes('/contents/') ? { commit: { sha: 'commit-branch-1' } } : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const branch = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/branches`, headers: { 'x-organization-id': org }, payload: { branch: 'testpilot/repair-1', baseSha: 'base-sha-1' } });
+      const commit = await app.inject({ method: 'PUT', url: `/v1/repositories/${repo.id}/contents`, headers: { 'x-organization-id': org }, payload: { branch: 'testpilot/repair-1', path: 'tests/repair.yaml', content: 'name: Repair\n', message: 'test: add repair manifest' } });
+      expect(branch.statusCode).toBe(201);
+      expect(commit.statusCode).toBe(201);
+      expect(commit.json<{ commitSha: string }>().commitSha).toBe('commit-branch-1');
+      expect(calls.map((call) => `${call.init?.method ?? 'GET'} ${call.url}`)).toEqual(expect.arrayContaining(['POST https://api.github.com/repos/owner/repo/git/refs', 'PUT https://api.github.com/repos/owner/repo/contents/tests/repair.yaml']));
+    } finally {
+      vi.unstubAllGlobals();
+      await unlink(keyPath).catch(() => undefined);
+      delete process.env['GITHUB_APP_ID'];
+      delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+      delete process.env['GITHUB_INSTALLATION_ID'];
+      await app.close();
+    }
+  });
 });
 
 describe('schedule persistence', () => {

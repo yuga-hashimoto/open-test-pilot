@@ -68,8 +68,8 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
       const value = rest[index + 1];
       if (flag?.startsWith('--') && value !== undefined && !value.startsWith('--')) flags.set(flag.slice(2), value);
     }
-    const platform = (flags.get('platform') ?? 'web') as 'web' | 'android' | 'flutter' | 'ios';
-    const framework = flags.get('framework') as 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'android' | 'flutter' | 'ios' | undefined;
+    const platform = (flags.get('platform') ?? 'web') as 'web' | 'api' | 'android' | 'flutter' | 'ios';
+    const framework = flags.get('framework') as 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'swagger' | 'postman' | 'graphql' | 'android' | 'flutter' | 'ios' | undefined;
     const generationOptions: ManifestGenerationOptions = {};
     const repository = flags.get('repository');
     const baseUrl = flags.get('base-url');

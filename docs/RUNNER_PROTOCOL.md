@@ -4,4 +4,4 @@ Jobs are asynchronous and contain `jobId`, `runId`, organization/project scope, 
 
 The protocol defines queued, leased, running, passed, failed, cancelled, expired, and rejected states; duplicate prevention by job/run identity; cancellation; timeout; and reassignment after heartbeat loss. Shared execution is Docker-isolated. Trusted host execution requires administrator policy.
 
-The current scheduler foundation provides priority ordering, browser and label capability matching, duplicate enqueue prevention, lease expiration, requeue, and completion transitions. A Redis-backed durable queue and server registration endpoints remain the next distributed-execution step.
+The current scheduler foundation provides priority ordering, browser and label capability matching, duplicate enqueue prevention, lease expiration, requeue, and completion transitions. The server exposes tenant-scoped runner registration, heartbeat, lease, completion, cancellation, and artifact-upload endpoints. Setting `REDIS_URL` selects the Redis-backed durable queue; without it, the same protocol uses the in-process queue for local development.

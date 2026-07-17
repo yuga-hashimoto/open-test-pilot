@@ -47,16 +47,23 @@ describe('web API client', () => {
       calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
       const body = String(input).endsWith('/sync')
         ? { id: 'repo-1', owner: 'owner', name: 'repo', fullName: 'owner/repo', defaultBranch: 'main', private: false, provider: 'github', createdAt: new Date().toISOString() }
+        : String(input).endsWith('/branches') ? { repositoryId: 'repo-1', branch: 'testpilot/repair', baseSha: 'base-sha' }
+          : String(input).endsWith('/contents') ? { repositoryId: 'repo-1', branch: 'testpilot/repair', path: 'tests/login.yaml', commitSha: 'commit-1' }
         : { repositoryId: 'repo-1', pullRequest: { number: 7, htmlUrl: 'https://github.com/owner/repo/pull/7', head: 'testpilot/repair', base: 'main' }, local: { id: 'pr-1', url: 'https://github.com/owner/repo/pull/7' } };
       return new Response(JSON.stringify(body), { status: 200 });
     });
     await api.syncRepository('repo-1');
+    await api.createBranch('repo-1', { branch: 'testpilot/repair', baseSha: 'base-sha' });
+    await api.commitFile('repo-1', { branch: 'testpilot/repair', path: 'tests/login.yaml', content: 'name: Login', message: 'test: repair' });
     await api.createGitHubPullRequest('repo-1', { title: 'Repair', head: 'testpilot/repair', draft: true });
     expect(calls[0]?.url).toBe('https://pilot.test/v1/repositories/repo-1/sync');
     expect(calls[0]?.init?.headers).toMatchObject({ 'x-organization-id': 'org-1' });
-    expect(calls[1]?.url).toBe('https://pilot.test/v1/repositories/repo-1/pull-requests');
+    expect(calls[1]?.url).toBe('https://pilot.test/v1/repositories/repo-1/branches');
     expect(calls[1]?.init?.method).toBe('POST');
     expect(calls[1]?.init?.body).toContain('testpilot/repair');
+    expect(calls[2]?.url).toBe('https://pilot.test/v1/repositories/repo-1/contents');
+    expect(calls[2]?.init?.method).toBe('PUT');
+    expect(calls[3]?.url).toBe('https://pilot.test/v1/repositories/repo-1/pull-requests');
   });
 
   it('loads GitHub branches and a comparison for diff review', async () => {

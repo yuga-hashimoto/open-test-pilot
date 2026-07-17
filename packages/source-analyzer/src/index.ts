@@ -1,8 +1,8 @@
 import type { Finding } from '@open-test-pilot/agent-protocol';
 import { DefaultManifestSchemaVersion, type Manifest, type ManifestAction } from '@open-test-pilot/manifest-schema';
 
-export type SourcePlatform = 'web' | 'android' | 'flutter' | 'ios';
-export type SourceFramework = 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'android' | 'flutter' | 'ios';
+export type SourcePlatform = 'web' | 'api' | 'android' | 'flutter' | 'ios';
+export type SourceFramework = 'javascript' | 'nextjs' | 'react-router' | 'vue' | 'angular' | 'remix' | 'nuxt' | 'openapi' | 'swagger' | 'postman' | 'graphql' | 'android' | 'flutter' | 'ios';
 export interface SourceFile { path: string; content: string; platform: SourcePlatform; framework?: SourceFramework; }
 
 export interface SourceAnalyzerPlugin {
@@ -26,7 +26,10 @@ const frameworkPlugins: readonly SourceAnalyzerPlugin[] = [
   { id: 'angular', platform: 'web', detect: (file) => [...lineFindings(file, /@Component\s*\(|@angular\/router|routerLink|\*ngFor/, 'angular-surface', 'Angular component, route, or repeated control detected')] },
   { id: 'remix', platform: 'web', detect: (file) => [...lineFindings(file, /export\s+(?:async\s+)?function\s+(?:loader|action)|@remix-run|<Form\b/, 'remix-route', 'Remix loader, action, or form surface detected')] },
   { id: 'nuxt', platform: 'web', detect: (file) => [...lineFindings(file, /defineNuxtConfig|defineEventHandler|useFetch\s*\(|NuxtLink/, 'nuxt-surface', 'Nuxt server, data, or navigation surface detected')] },
-  { id: 'openapi', platform: 'web', detect: (file) => [...lineFindings(file, /openapi:\s*['"]|swagger:\s*['"]|paths:\s*$|operationId:/, 'openapi-operation', 'OpenAPI operation can be exercised as an HTTP action')] },
+  { id: 'openapi', platform: 'api', detect: (file) => [...lineFindings(file, /openapi:\s*['"]|paths:\s*$|operationId:|^\s{2,}\/[^:]+:\s*$/, 'openapi-operation', 'OpenAPI operation can be exercised as an HTTP action')] },
+  { id: 'swagger', platform: 'api', detect: (file) => [...lineFindings(file, /swagger:\s*['"]|paths:\s*$|operationId:|^\s{2,}\/[^:]+:\s*$/, 'swagger-operation', 'Swagger operation can be exercised as an HTTP action')] },
+  { id: 'postman', platform: 'api', detect: (file) => [...lineFindings(file, /["'](?:request|method|url|item)["']\s*:/, 'postman-request', 'Postman request can be exercised as an HTTP action')] },
+  { id: 'graphql', platform: 'api', detect: (file) => [...lineFindings(file, /\b(?:type\s+Query|type\s+Mutation|query\s+\w+|mutation\s+\w+)\b/, 'graphql-operation', 'GraphQL operation can be exercised as an API action')] },
   { id: 'android', platform: 'android', detect: (file) => [...lineFindings(file, /class\s+\w+Activity\b|@Composable|resource-id|contentDescription|testTag/, 'android-surface', 'Android activity, Compose, or stable locator surface detected')] },
   { id: 'flutter', platform: 'flutter', detect: (file) => [...lineFindings(file, /MaterialApp\s*\(|GoRoute|@RoutePage|ValueKey|Semantics\s*\(/, 'flutter-surface', 'Flutter navigation, widget, or stable locator surface detected')] },
   { id: 'ios', platform: 'ios', detect: (file) => [...lineFindings(file, /NavigationStack|NavigationView|UIViewController|accessibilityIdentifier|accessibilityLabel/, 'ios-surface', 'iOS navigation, view controller, or accessibility surface detected')] },
@@ -49,8 +52,10 @@ export function analyzeSource(file: SourceFile, registry: ReadonlyMap<SourceFram
   const lines = file.content.split('\n');
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
-    if (file.platform === 'web') {
+    if (file.platform === 'web' || file.platform === 'api') {
       if (/app\.(get|post|put|delete)\s*\(/.test(line) || /router\.(get|post|put|delete)\s*\(/.test(line)) add('api-route', 'HTTP route can be exercised as an API action', lineNumber);
+      if (/\b(?:fetch|axios\.(?:get|post|put|delete|patch)|request\s*\()/.test(line)) add('api-client', 'REST client call can be exercised as an API action', lineNumber);
+      if (/\b(?:query|mutation)\s+\w+\s*[({]/.test(line) || /\b(?:type\s+Query|type\s+Mutation)\b/.test(line)) add('graphql-operation', 'GraphQL operation can be exercised as an API action', lineNumber);
       if (/<(form|button|input)\b/i.test(line)) add('form-control', 'Interactive web control is a Manifest candidate', lineNumber);
       if (/getByRole|getByLabel|getByTestId|data-testid|aria-label/.test(line)) add('stable-locator', 'Existing accessible/test locator can seed a stable selector', lineNumber);
     }
@@ -93,9 +98,17 @@ function slug(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'source-test';
 }
 
-function sourceRoute(file: SourceFile, line: string): string {
+function sourceRoute(file: SourceFile, line: string, lineNumber = 1): string {
   const match = line.match(/(?:app|router)\.(?:get|post|put|delete)\s*\(\s*["'`]([^"'`]+)["'`]/i);
   if (match?.[1] !== undefined) return match[1];
+  const explicitPath = line.match(/["'`](\/[^"'`\s]+)["'`]/)?.[1];
+  if (explicitPath !== undefined) return explicitPath;
+  const precedingLines = file.content.split('\n').slice(0, lineNumber).reverse();
+  const documentPath = precedingLines.find((candidate) => /^\s{2,}\/[^:\s]+\s*:\s*$/.test(candidate))?.match(/(\/[^:\s]+)\s*:/)?.[1];
+  if (documentPath !== undefined) return documentPath;
+  const followingLines = file.content.split('\n').slice(lineNumber - 1);
+  const nextDocumentPath = followingLines.find((candidate) => /^\s{2,}\/[^:\s]+\s*:\s*$/.test(candidate))?.match(/(\/[^:\s]+)\s*:/)?.[1];
+  if (nextDocumentPath !== undefined) return nextDocumentPath;
   const nextPath = file.path.replace(/^.*?(?:app|pages)\//, '/').replace(/\.(?:tsx?|jsx?)$/, '').replace(/\/page$/, '') || '/';
   return nextPath.startsWith('/') ? nextPath : `/${nextPath}`;
 }
@@ -113,9 +126,10 @@ function locatorFromLine(line: string): string {
 function actionForFinding(finding: Finding, file: SourceFile, options: Required<Pick<ManifestGenerationOptions, 'baseUrl'>>): ManifestAction {
   const line = file.content.split('\n')[Math.max(0, (finding.source.line ?? 1) - 1)] ?? '';
   const id = `${slug(finding.type)}-${finding.source.line ?? 1}`;
-  if (finding.type === 'api-route' || finding.type === 'nextjs-route' || finding.type === 'react-router-route' || finding.type === 'remix-route') {
-    const method = line.match(/\.(get|post|put|delete)\s*\(/i)?.[1]?.toUpperCase() ?? 'GET';
-    return { id, type: 'api.request', method, url: `${options.baseUrl}${sourceRoute(file, line)}`, expectedStatus: [200, 201, 204] };
+  if (finding.type === 'api-route' || finding.type === 'api-client' || finding.type === 'openapi-operation' || finding.type === 'swagger-operation' || finding.type === 'postman-request' || finding.type === 'graphql-operation' || finding.type === 'nextjs-route' || finding.type === 'react-router-route' || finding.type === 'remix-route') {
+    const method = line.match(/\.(get|post|put|delete|patch)\s*\(/i)?.[1]?.toUpperCase() ?? line.match(/\bmethod\s*["']?\s*:\s*["'](GET|POST|PUT|DELETE|PATCH)["']/i)?.[1]?.toUpperCase() ?? 'GET';
+    const url = finding.type === 'graphql-operation' ? `${options.baseUrl}/graphql` : `${options.baseUrl}${sourceRoute(file, line, finding.source.line ?? 1)}`;
+    return { id, type: 'api.request', method: finding.type === 'graphql-operation' ? 'POST' : method, url, ...(finding.type === 'graphql-operation' ? { body: { query: line.trim() } } : {}), expectedStatus: [200, 201, 204] };
   }
   if (finding.type === 'form-control' || finding.type === 'stable-locator') {
     return { id, type: 'web.expectVisible', selector: locatorFromLine(line) };
@@ -145,7 +159,7 @@ export function generateManifestFromSource(file: SourceFile, options: ManifestGe
     preconditions: [],
     variables: [],
     secrets: [],
-    setup: [{ id: 'open-base-url', actions: [{ id: 'goto-base-url', type: 'web.goto', url: baseUrl }] }],
+    setup: file.platform === 'web' ? [{ id: 'open-base-url', actions: [{ id: 'goto-base-url', type: 'web.goto', url: baseUrl }] }] : [],
     steps,
     cleanup: [],
     artifacts: { screenshots: 'after', traces: true },
