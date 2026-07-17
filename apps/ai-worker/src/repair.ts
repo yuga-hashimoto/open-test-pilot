@@ -2,7 +2,7 @@ import type { AgentRequest } from '@open-test-pilot/agent-protocol';
 import type { GitHubPullRequest, GitHubApiClient } from '@open-test-pilot/github-adapter';
 
 export interface RepairProposal { request: AgentRequest; manifestPath: string; manifestContent: string; baseBranch: string; baseSha: string; title: string; body: string; }
-export interface RepairPublisher { createBranch(owner: string, repository: string, branch: string, baseSha: string): Promise<void>; commitFile(owner: string, repository: string, input: { branch: string; path: string; content: string; message: string }): Promise<{ commitSha: string }>; createPullRequest(owner: string, repository: string, input: { title: string; head: string; base: string; body?: string; draft?: boolean }): Promise<GitHubPullRequest>; }
+export interface RepairPublisher { createBranch(owner: string, repository: string, branch: string, baseSha: string): Promise<void>; getFile?(owner: string, repository: string, path: string, ref: string): Promise<{ sha: string } | undefined>; commitFile(owner: string, repository: string, input: { branch: string; path: string; content: string; message: string; sha?: string }): Promise<{ commitSha: string }>; createPullRequest(owner: string, repository: string, input: { title: string; head: string; base: string; body?: string; draft?: boolean }): Promise<GitHubPullRequest>; }
 
 export async function publishRepairProposal(client: RepairPublisher, proposal: RepairProposal): Promise<{ branch: string; commitSha: string; pullRequest: GitHubPullRequest }> {
   if (proposal.request.operation !== 'repair') throw new Error('only repair requests can be published');
@@ -11,7 +11,8 @@ export async function publishRepairProposal(client: RepairPublisher, proposal: R
   const { owner, repository } = parseGitHubRepository(proposal.request.repository.url);
   const branch = `testpilot/repair/${proposal.request.requestId}`;
   await client.createBranch(owner, repository, branch, proposal.baseSha);
-  const commit = await client.commitFile(owner, repository, { branch, path: proposal.manifestPath, content: proposal.manifestContent, message: proposal.title });
+  const existing = client.getFile === undefined ? undefined : await client.getFile(owner, repository, proposal.manifestPath, proposal.baseBranch);
+  const commit = await client.commitFile(owner, repository, { branch, path: proposal.manifestPath, content: proposal.manifestContent, message: proposal.title, ...(existing === undefined ? {} : { sha: existing.sha }) });
   const pullRequest = await client.createPullRequest(owner, repository, { title: proposal.title, head: branch, base: proposal.baseBranch, body: proposal.body, draft: true });
   return { branch, commitSha: commit.commitSha, pullRequest };
 }

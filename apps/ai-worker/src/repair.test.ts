@@ -15,4 +15,16 @@ describe('AI repair publisher', () => {
     const base = { request: { requestId: 'req-1', protocolVersion: '1.0.0' as const, operation: 'repair' as const, repository: { url: 'https://github.com/org/repo', branch: 'main', commit: 'base-1' } }, manifestPath: 'src/app.ts', manifestContent: 'bad', baseBranch: 'main', baseSha: 'base-1', title: 'Repair', body: '' };
     await expect(publishRepairProposal(publisher, base)).rejects.toThrow('forbidAppCodeChanges');
   });
+
+  it('passes the base file SHA when updating an existing manifest', async () => {
+    let commitInput: { sha?: string } | undefined;
+    const publisher: RepairPublisher = {
+      async createBranch() {},
+      async getFile() { return { sha: 'manifest-base-sha' }; },
+      async commitFile(_owner, _repository, input) { commitInput = input; return { commitSha: 'commit-1' }; },
+      async createPullRequest(_owner, _repository, input) { return { number: 4, htmlUrl: 'https://github.com/org/repo/pull/4', head: input.head, base: input.base }; },
+    };
+    await publishRepairProposal(publisher, { request: { requestId: 'req-sha', protocolVersion: '1.0.0', operation: 'repair', repository: { url: 'https://github.com/org/repo', branch: 'main', commit: 'base-1' }, constraints: { forbidAppCodeChanges: true } }, manifestPath: 'tests/login.yaml', manifestContent: 'name: Login\n', baseBranch: 'main', baseSha: 'base-1', title: 'Repair login', body: 'Generated proposal' });
+    expect(commitInput?.sha).toBe('manifest-base-sha');
+  });
 });

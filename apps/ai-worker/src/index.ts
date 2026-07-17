@@ -295,6 +295,12 @@ function createGitHubRepairPublisherFromEnvironment(): RepairPublisher | undefin
   }
   return {
     async createBranch(owner, repository, branch, baseSha) { await (await client()).createBranch(owner, repository, branch, baseSha); },
+    async getFile(owner, repository, path, ref) {
+      try { return await (await client()).getFile(owner, repository, path, ref); } catch (error) {
+        if (error instanceof Error && /404|not found/i.test(error.message)) return undefined;
+        throw error;
+      }
+    },
     async commitFile(owner, repository, input) { return await (await client()).commitFile(owner, repository, input); },
     async createPullRequest(owner, repository, input) { return await (await client()).createPullRequest(owner, repository, input); },
   };

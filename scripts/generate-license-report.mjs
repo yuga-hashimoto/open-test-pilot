@@ -4,8 +4,10 @@ import { mkdir, writeFile } from 'node:fs/promises';
 const raw = execFileSync('pnpm', ['licenses', 'list', '--json'], { encoding: 'utf8' });
 const grouped = JSON.parse(raw);
 const packages = [];
+const platformPackagePattern = /(?:^|[-/])(darwin|linux|win32|freebsd|android|aix|sunos)-(?:arm64|x64|ia32|arm|x86)(?:[-/]|$)/;
 for (const [license, entries] of Object.entries(grouped)) {
   for (const entry of entries) {
+    if (entry.name === 'fsevents' || platformPackagePattern.test(entry.name)) continue;
     for (const version of entry.versions ?? []) packages.push({ license, name: entry.name, version });
   }
 }
