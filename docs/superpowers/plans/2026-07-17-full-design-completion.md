@@ -52,7 +52,7 @@
 - [x] Add tenant-safe repository sync, branch/commit metadata, PR intent, Check, Status, and comment boundaries with explicit response-ID validation.
 - [x] Add API methods and live UI controls for Manifest edit, diff, schedule/run evidence, artifact bodies, and reports; URL-encode path identifiers.
 - [x] Exercise the installed GitHub App surface in the existing authenticated setup and record installation `146977164`.
-- [ ] Complete OAuth/session → real GitHub App token → branch/PR/Check/status/comment browser flow; blocked by unavailable current Chrome session/private-key approval, not by local code.
+- [ ] Complete OAuth/session → real GitHub App token → branch/PR/Check/status/comment browser flow; local code and read paths are verified, but GitHub Mobile approval timed out and the App private key is not available on disk.
 
 ### Task 3: Complete storage lifecycle, result import, and administration surfaces
 
@@ -100,7 +100,7 @@
 - [x] Run the real personal Web scenario, including a real failure, evidence inspection, Codex Manifest repair, and successful rerun.
 - [x] Run the real team PostgreSQL/Redis/MinIO scenario; complete the GitHub App write scenario when external credentials are available.
 - [x] Run the real complex-flow and remote-Docker scenarios, verifying uploaded artifacts and stored results.
-- [x] Run Android Appium; iOS capability probe is recorded as unavailable because no XCUITest simulator/device is configured.
+- [x] Run Android Appium; attempt iOS Appium/XCUITest on an iOS 26.4 simulator and record the WDA runtime startup timeout after a successful Xcode build as an environment gate.
 - [x] Run the AI Worker with the configured Codex adapter and verify analyze-failure, Manifest-only repair, validation, execution, and result upload; branch/PR publication remains GitHub-gated.
 - [x] Complete the requirement-by-requirement audit; the remaining unchecked items are external capability gates listed above.
 
