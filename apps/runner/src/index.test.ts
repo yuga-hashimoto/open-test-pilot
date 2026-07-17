@@ -16,6 +16,13 @@ describe('createRunnerClient', () => {
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('body');
   });
 
+  it('forwards the hosted session token to runner API calls', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ runnerId: 'runner-1' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await createRunnerClient('http://runner.test', 'org-1', 'session-1').register('runner', { browsers: ['chromium'], maxConcurrency: 1 });
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer session-1' }) }));
+  });
+
   it('keeps a long-running lease alive and stops heartbeats after execution', async () => {
     const heartbeat = vi.fn(async () => undefined);
     const client = { heartbeat } as unknown as RunnerClient;

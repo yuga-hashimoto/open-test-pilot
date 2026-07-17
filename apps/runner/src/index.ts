@@ -10,8 +10,8 @@ export interface RunnerClient {
   uploadArtifact(runId: string, input: { key: string; contentType: string; body: Uint8Array }): Promise<{ artifactId: string }>;
 }
 
-export function createRunnerClient(baseUrl: string, organizationId: string): RunnerClient {
-  const headers = { accept: 'application/json', 'x-organization-id': organizationId };
+export function createRunnerClient(baseUrl: string, organizationId: string, sessionToken?: string): RunnerClient {
+  const headers = { accept: 'application/json', 'x-organization-id': organizationId, ...(sessionToken === undefined ? {} : { authorization: `Bearer ${sessionToken}` }) };
   const jsonHeaders = { ...headers, 'content-type': 'application/json' };
   return {
     async register(name, capabilities) {
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   const baseUrl = process.env['OPENTESTPILOT_URL'] ?? 'http://127.0.0.1:3001';
   const organizationId = process.env['OPENTESTPILOT_ORGANIZATION_ID'];
   if (organizationId === undefined) throw new Error('OPENTESTPILOT_ORGANIZATION_ID is required');
-  await runRunnerLoop(createRunnerClient(baseUrl, organizationId), { name: process.env['RUNNER_NAME'] ?? 'self-hosted-runner', capabilities: { browsers: ['chromium'], maxConcurrency: 1, labels: (process.env['RUNNER_LABELS'] ?? 'linux').split(',') }, docker: { image: process.env['RUNNER_IMAGE'] ?? 'ghcr.io/open-test-pilot/runner:latest', memoryMb: 1024, cpus: 1 } });
+  await runRunnerLoop(createRunnerClient(baseUrl, organizationId, process.env['OPENTESTPILOT_SESSION_TOKEN']), { name: process.env['RUNNER_NAME'] ?? 'self-hosted-runner', capabilities: { browsers: ['chromium'], maxConcurrency: 1, labels: (process.env['RUNNER_LABELS'] ?? 'linux').split(',') }, docker: { image: process.env['RUNNER_IMAGE'] ?? 'ghcr.io/open-test-pilot/runner:latest', memoryMb: 1024, cpus: 1 } });
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) await main();

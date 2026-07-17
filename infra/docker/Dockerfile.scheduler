@@ -16,4 +16,5 @@ COPY --from=build /workspace/apps/scheduler/package.json ./apps/scheduler/packag
 COPY --from=build /workspace/apps/scheduler/dist ./apps/scheduler/dist
 COPY --from=build /workspace/packages ./packages
 RUN pnpm install --prod --frozen-lockfile --filter @open-test-pilot/scheduler-service...
+USER node
 CMD ["pnpm", "--filter", "@open-test-pilot/scheduler-service", "start"]

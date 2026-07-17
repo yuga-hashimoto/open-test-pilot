@@ -16,5 +16,6 @@ COPY --from=build /workspace/apps/server/package.json ./apps/server/package.json
 COPY --from=build /workspace/apps/server/dist ./apps/server/dist
 COPY --from=build /workspace/packages ./packages
 RUN pnpm install --prod --frozen-lockfile
+USER node
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@open-test-pilot/server", "start"]

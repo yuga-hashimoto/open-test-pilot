@@ -72,7 +72,23 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on: [server]
+  ai-worker:
+    profiles: ["ai-worker"]
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.ai-worker
+    environment:
+      OPENTESTPILOT_URL: http://server:3001
+      OPENTESTPILOT_ORGANIZATION_ID: ${OPENTESTPILOT_ORGANIZATION_ID:?set an organization id before starting the AI worker}
+      OPENTESTPILOT_SESSION_TOKEN: ${OPENTESTPILOT_SESSION_TOKEN:-}
+      OPENTESTPILOT_GIT_TOKEN: ${OPENTESTPILOT_GIT_TOKEN:-}
+      OPENTESTPILOT_AGENT: ${OPENTESTPILOT_AGENT:-codex}
+      WORKER_REPOSITORY: /workspace
+    volumes:
+      - ai-worker-workspace:/workspace
+    depends_on: [server]
 
 volumes:
   postgres-data:
   minio-data:
+  ai-worker-workspace:

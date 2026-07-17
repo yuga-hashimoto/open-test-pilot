@@ -1,0 +1,27 @@
+FROM node:22-bookworm-slim AS build
+WORKDIR /workspace
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
+COPY packages ./packages
+COPY apps/ai-worker ./apps/ai-worker
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @open-test-pilot/ai-worker... build
+
+FROM node:22-bookworm-slim
+ARG CODEX_VERSION=0.144.5
+ARG CLAUDE_CODE_VERSION=2.1.212
+WORKDIR /app
+ENV NODE_ENV=production
+RUN corepack enable \
+  && npm install --global "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+  && npm cache clean --force
+COPY --from=build /workspace/package.json /workspace/pnpm-lock.yaml /workspace/pnpm-workspace.yaml ./
+COPY --from=build /workspace/apps/ai-worker/package.json ./apps/ai-worker/package.json
+COPY --from=build /workspace/apps/ai-worker/dist ./apps/ai-worker/dist
+COPY --from=build /workspace/packages ./packages
+RUN pnpm install --prod --frozen-lockfile --filter @open-test-pilot/ai-worker...
+RUN install -d -o node -g node /workspace
+ENV OPENTESTPILOT_WORKER_ENABLED=true
+ENV OPENTESTPILOT_WORKER_MODE=daemon
+USER node
+ENTRYPOINT ["node", "apps/ai-worker/dist/index.js"]
