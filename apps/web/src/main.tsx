@@ -32,6 +32,7 @@ import {
   type LoginCompleteResult,
   type TestPilotApi,
 } from "./api.js";
+import { getOrganizationDisplayName } from "./organization.js";
 import "./style.css";
 
 type Status = "passed" | "failed" | "running" | "cancelled";
@@ -109,7 +110,7 @@ function StatusPill({ status }: { status: Status }) {
 }
 
 const SESSION_KEY = "opentestpilot-session";
-type StoredLoginSession = LoginCompleteResult & { organizationId?: string };
+type StoredLoginSession = LoginCompleteResult & { organizationId?: string; organizationName?: string };
 function getStoredSession(): StoredLoginSession | undefined {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -195,7 +196,7 @@ function CallbackPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLog
   );
 }
 
-function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl: string; session: StoredLoginSession; onSelect: (organizationId: string) => void }) {
+function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl: string; session: StoredLoginSession; onSelect: (organizationId: string, organizationName: string) => void }) {
   const [organizations, setOrganizations] = useState<ApiOrganization[]>([]);
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -214,7 +215,7 @@ function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl:
     if (trimmed.length === 0) return;
     setLoading(true);
     void authApi.createOrganization(session.sessionToken, trimmed)
-      .then((organization) => onSelect(organization.id))
+      .then((organization) => onSelect(organization.id, organization.name))
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to create organization"))
       .finally(() => setLoading(false));
   };
@@ -224,7 +225,7 @@ function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl:
         <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong><small>QA control plane</small></div></div>
         <h1>Select an organization</h1>
         <p>Choose a workspace for your GitHub account, or create one to start syncing repositories.</p>
-        {organizations.map((organization) => <button key={organization.id} className="login-github-button organization-choice" onClick={() => onSelect(organization.id)}>{organization.name}</button>)}
+        {organizations.map((organization) => <button key={organization.id} className="login-github-button organization-choice" onClick={() => onSelect(organization.id, organization.name)}>{organization.name}</button>)}
         <div className="organization-create">
           <input aria-label="Organization name" value={name} onChange={(event) => setName(event.target.value)} placeholder="New organization" />
           <button className="login-github-button" onClick={create} disabled={loading || name.trim().length === 0}>Create</button>
@@ -236,7 +237,7 @@ function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl:
   );
 }
 
-function App({ sessionToken, login, organizationId, serverBaseUrl, onLogout }: { sessionToken?: string | undefined; login?: string | undefined; organizationId?: string | undefined; serverBaseUrl?: string | undefined; onLogout?: (() => void) | undefined }) {
+function App({ sessionToken, login, organizationId, organizationName, serverBaseUrl, onLogout }: { sessionToken?: string | undefined; login?: string | undefined; organizationId?: string | undefined; organizationName?: string | undefined; serverBaseUrl?: string | undefined; onLogout?: (() => void) | undefined }) {
   const api = useMemo<TestPilotApi | undefined>(() => {
     const config = getApiConfig();
     const resolvedOrganizationId = organizationId ?? config?.organizationId;
@@ -290,6 +291,8 @@ function App({ sessionToken, login, organizationId, serverBaseUrl, onLogout }: {
     ["Schedules", "clock"],
     ["GitHub", "branch"],
   ];
+  const workspaceName = organizationName === undefined && api === undefined ? "Shopfront" : getOrganizationDisplayName(organizationName === undefined ? undefined : { name: organizationName });
+  const workspaceSubtitle = organizationName === undefined && api === undefined ? "staging" : "team";
   useEffect(() => {
     if (api === undefined) return;
     void Promise.all([
@@ -455,8 +458,8 @@ function App({ sessionToken, login, organizationId, serverBaseUrl, onLogout }: {
         <button className="project-select">
           <span className="project-avatar">S</span>
           <span>
-            <b>Shopfront</b>
-            <small>staging</small>
+            <b>{workspaceName}</b>
+            <small>{workspaceSubtitle}</small>
           </span>
           <Icon name="chevron" />
         </button>
@@ -2688,10 +2691,10 @@ function Root() {
     setSession(result);
     window.history.replaceState({}, "", "/");
   }, []);
-  const handleOrganization = useCallback((organizationId: string) => {
+  const handleOrganization = useCallback((organizationId: string, organizationName: string) => {
     setSession((current) => {
       if (current === undefined) return current;
-      const updated = { ...current, organizationId };
+      const updated = { ...current, organizationId, organizationName };
       storeSession(updated);
       return updated;
     });
@@ -2716,7 +2719,7 @@ function Root() {
   if (session === undefined && config?.sessionToken === undefined && (authRequired || config?.organizationId === undefined)) return <LoginPage serverBaseUrl={serverBaseUrl} onLogin={handleLogin} />;
   const organizationId = config?.organizationId ?? session?.organizationId;
   if (organizationId === undefined && session !== undefined) return <OrganizationPage serverBaseUrl={serverBaseUrl} session={session} onSelect={handleOrganization} />;
-  return <App sessionToken={session?.sessionToken ?? config?.sessionToken} login={session?.login} organizationId={organizationId} serverBaseUrl={serverBaseUrl} onLogout={session === undefined ? undefined : handleLogout} />;
+  return <App sessionToken={session?.sessionToken ?? config?.sessionToken} login={session?.login} organizationId={organizationId} organizationName={session?.organizationName} serverBaseUrl={serverBaseUrl} onLogout={session === undefined ? undefined : handleLogout} />;
 }
 
 createRoot(document.getElementById("root")!).render(<Root />);

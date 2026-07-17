@@ -52,7 +52,7 @@
 - [x] Add tenant-safe repository sync, branch/commit metadata, PR intent, Check, Status, and comment boundaries with explicit response-ID validation.
 - [x] Add API methods and live UI controls for Manifest edit, diff, schedule/run evidence, artifact bodies, and reports; URL-encode path identifiers.
 - [x] Exercise the installed GitHub App surface in the existing authenticated setup and record installation `146977164`.
-- [ ] Complete OAuth/session → browser UI → real GitHub App token flow. The App JWT/installation-token path and server-side branch/commit/PR/Check/status/comment operations are live-verified; the remaining gate is configuring an OAuth client and completing GitHub's sudo-mode approval in the existing Chrome session.
+- [x] Complete OAuth/session → browser UI → real GitHub App token flow. GitHub Mobile sudo approval was completed, a real App Client Secret was generated and configured only in ignored local environment, and the browser completed authorization → callback → code exchange → authenticated session → organization list/create/select → tenant-scoped Web UI change request creation.
 
 ### Task 3: Complete storage lifecycle, result import, and administration surfaces
 
