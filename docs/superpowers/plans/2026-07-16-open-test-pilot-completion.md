@@ -38,6 +38,6 @@
 - [x] Live Redis container: register/enqueue/lease/complete.
 - [x] Live Fastify + PostgreSQL + Redis HTTP flow: create run, Runner lease, artifact upload, completion, passed run.
 - [x] GitHub API write flow with real App installation credentials (App ID `4314915`, installation `146977164`; branch/commit/draft PR/check/status/comment smoke completed and cleaned up).
-- [ ] Appium emulator/simulator flow with an available device.
+- [x] Appium emulator/simulator flow with available Android and iOS simulators; Android Settings and localized iOS Settings were executed through Appium and produced screenshots/page-source evidence.
 
-Appium remains an environment gate: this machine currently has no Android device in `adb devices`, no available iOS simulator runtime/device in `xcrun simctl list devices available`, and no `appium` executable. The adapter and generated WebdriverIO boundary are covered by unit tests, but no fake device success is claimed.
+The Appium gate was verified on 2026-07-17 with Appium 3.5.2, UiAutomator2 8.1.0 on Android 16/API 36, and XCUITest 11.17.7 with WebDriverAgent 15.1.6 on iOS 26.4.1. The iOS host needed a temporary writable CoreSimulator root because the external-volume default Device Set returned a permission error; the original symlink was restored after verification. Current runtime evidence is recorded in `docs/ACCEPTANCE_EVIDENCE.md` and `docs/REQUIREMENT_AUDIT.md`.
