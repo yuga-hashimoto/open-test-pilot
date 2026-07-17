@@ -1,0 +1,43 @@
+schemaVersion: "1.0.0"
+id: repair-login
+name: Repair login fixture
+description: Intentionally failing selector used by the real Codex repair acceptance flow
+type: e2e
+tags:
+  - repair
+priority: high
+preconditions: []
+variables: []
+secrets: []
+setup: []
+steps:
+  - id: login
+    description: Sign in with the fixture app
+    actions:
+      - id: open-login
+        type: web.goto
+        url: http://127.0.0.1:4173/login
+      - id: fill-email
+        type: web.fill
+        selector: "label=メールアドレス"
+        value: test@example.com
+      - id: submit-login
+        type: web.click
+        selector: "role=button[name=Sign in]"
+      - id: assert-dashboard
+        type: web.expectVisible
+        selector: "[data-testid=dashboard]"
+cleanup: []
+artifacts:
+  screenshots: after
+  traces: true
+runner:
+  minBrowsers:
+    - chromium
+permissions:
+  networkAccess: true
+source:
+  repository: local
+  path: examples/manifests/repair-login.yaml
+generatedCode:
+  path: generated/repair-login.spec.ts

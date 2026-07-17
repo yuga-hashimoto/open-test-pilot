@@ -28,6 +28,7 @@ export interface TestPilotApi {
   updateChangeRequest(id: string, patch: { status?: ApiChangeRequest['status']; description?: string }): Promise<ApiChangeRequest>;
   getRunFailures(runId: string): Promise<ApiFailure[]>;
   listArtifacts(runId: string): Promise<ApiArtifact[]>;
+  getArtifactContent(artifactId: string): Promise<Blob>;
   getReport(runId: string): Promise<{ runId: string; status: ApiRun['status']; reportUrl?: string }>;
   getRunEvidence(runId: string): Promise<ApiRunEvidence>;
 }
@@ -66,6 +67,11 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async updateChangeRequest(id, patch) { return await request<ApiChangeRequest>(`/v1/change-requests/${pathId(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },
     async getRunFailures(runId) { return (await request<{ failures: ApiFailure[] }>(`/v1/runs/${pathId(runId)}/failures`)).failures; },
     async listArtifacts(runId) { return (await request<{ artifacts: ApiArtifact[] }>(`/v1/runs/${pathId(runId)}/artifacts`)).artifacts; },
+    async getArtifactContent(artifactId) {
+      const response = await fetcher(`${config.baseUrl}/v1/artifacts/${pathId(artifactId)}`, { headers });
+      if (!response.ok) throw new Error(`OpenTestPilot API returned ${response.status}`);
+      return await response.blob();
+    },
     async getReport(runId) { return await request<{ runId: string; status: ApiRun['status']; reportUrl?: string }>(`/v1/runs/${pathId(runId)}/report`); },
     async getRunEvidence(runId) { const [failures, artifacts, report] = await Promise.all([this.getRunFailures(runId), this.listArtifacts(runId), this.getReport(runId)]); return { failures, artifacts, report }; },
   };
