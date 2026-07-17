@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
-import type { AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
+import type { AiWorkerJobRecord, AiWorkerRecord, ArtifactMetadata, AuditEventRecord, ChangeRequestRecord, Organization, OrganizationMemberRecord, Project, PullRequestRecord, RepairRecord, RepositoryRecord, RunRecord, ScheduleRecord, SecretRecord, ServerRunStatus, StoragePolicyRecord, StoredRunResult, TenantRepository, TestRecord } from './index.js';
 
 type RunPatch = Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt'>>;
 
@@ -286,6 +286,38 @@ export class PostgresTenantRepository implements TenantRepository {
     });
   }
 
+  async createAiWorkerJob(organizationId: string, workerId: string, operation: string, request: Record<string, unknown>): Promise<AiWorkerJobRecord> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<AiWorkerJobRow>('INSERT INTO ai_worker_jobs (organization_id, worker_id, operation, request, status) VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING id, organization_id, worker_id, operation, request, result, status, attempt, lease_expires_at, created_at, updated_at', [organizationId, workerId, operation, JSON.stringify(request), 'queued']);
+      return aiWorkerJobFromRow(requiredRow(result.rows[0]));
+    });
+  }
+
+  async listAiWorkerJobs(organizationId: string): Promise<AiWorkerJobRecord[]> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const result = await client.query<AiWorkerJobRow>('SELECT id, organization_id, worker_id, operation, request, result, status, attempt, lease_expires_at, created_at, updated_at FROM ai_worker_jobs WHERE organization_id = $1 ORDER BY created_at DESC, id DESC', [organizationId]);
+      return result.rows.map(aiWorkerJobFromRow);
+    });
+  }
+
+  async leaseAiWorkerJob(workerId: string, organizationId: string): Promise<AiWorkerJobRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      await client.query("UPDATE ai_worker_jobs SET status = 'queued', lease_expires_at = NULL, updated_at = now() WHERE organization_id = $1 AND worker_id = $2 AND status = 'leased' AND lease_expires_at < now()", [organizationId, workerId]);
+      const next = await client.query<AiWorkerJobRow>('SELECT id, organization_id, worker_id, operation, request, result, status, attempt, lease_expires_at, created_at, updated_at FROM ai_worker_jobs WHERE organization_id = $1 AND worker_id = $2 AND status = \'queued\' ORDER BY created_at ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED', [organizationId, workerId]);
+      const row = next.rows[0];
+      if (row === undefined) return undefined;
+      const leased = await client.query<AiWorkerJobRow>("UPDATE ai_worker_jobs SET status = 'leased', attempt = attempt + 1, lease_expires_at = now() + interval '5 minutes', updated_at = now() WHERE organization_id = $1 AND id = $2 RETURNING id, organization_id, worker_id, operation, request, result, status, attempt, lease_expires_at, created_at, updated_at", [organizationId, row.id]);
+      return aiWorkerJobFromRow(requiredRow(leased.rows[0]));
+    });
+  }
+
+  async completeAiWorkerJob(organizationId: string, jobId: string, status: 'completed' | 'failed' | 'cancelled', result?: Record<string, unknown>): Promise<AiWorkerJobRecord | undefined> {
+    return this.tenantQuery(organizationId, async (client) => {
+      const updated = await client.query<AiWorkerJobRow>('UPDATE ai_worker_jobs SET status = $3, result = COALESCE($4::jsonb, result), lease_expires_at = NULL, updated_at = now() WHERE organization_id = $1 AND id = $2 AND status = \'leased\' RETURNING id, organization_id, worker_id, operation, request, result, status, attempt, lease_expires_at, created_at, updated_at', [organizationId, jobId, status, result === undefined ? null : JSON.stringify(result)]);
+      return updated.rows[0] === undefined ? undefined : aiWorkerJobFromRow(updated.rows[0]);
+    });
+  }
+
   async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
     return this.tenantQuery(organizationId, async (client) => {
       const encryptedValue = input.value === undefined ? null : encryptSecretValue(input.value, secretEncryptionKey());
@@ -465,6 +497,8 @@ function projectFromRow(row: { id: string; organization_id: string; name: string
 function testFromRow(row: { id: string; organization_id: string; project_id: string; name: string; manifest_id: string; created_at: Date }): TestRecord { return { id: row.id, organizationId: row.organization_id, projectId: row.project_id, name: row.name, manifestId: row.manifest_id, createdAt: dateValue(row.created_at) }; }
 function storagePolicyFromRow(row: { organization_id: string; success_retention_days: number; failure_retention_days: number; fixed_retention: boolean; generated_code_retention_days: number; capacity_bytes: string | number | null; updated_at: Date }): StoragePolicyRecord { return { organizationId: row.organization_id, successRetentionDays: row.success_retention_days, failureRetentionDays: row.failure_retention_days, fixedRetention: row.fixed_retention, generatedCodeRetentionDays: row.generated_code_retention_days, ...(row.capacity_bytes === null ? {} : { capacityBytes: Number(row.capacity_bytes) }), updatedAt: dateValue(row.updated_at) }; }
 function aiWorkerFromRow(row: { id: string; organization_id: string; name: string; policy: Record<string, unknown>; last_heartbeat_at: Date | null; created_at: Date }): AiWorkerRecord { return { id: row.id, organizationId: row.organization_id, name: row.name, policy: row.policy, ...(row.last_heartbeat_at === null ? {} : { lastHeartbeatAt: dateValue(row.last_heartbeat_at) }), createdAt: dateValue(row.created_at) }; }
+interface AiWorkerJobRow { id: string; organization_id: string; worker_id: string; operation: string; request: Record<string, unknown>; result: Record<string, unknown> | null; status: AiWorkerJobRecord['status']; attempt: number; lease_expires_at: Date | null; created_at: Date; updated_at: Date; }
+function aiWorkerJobFromRow(row: AiWorkerJobRow): AiWorkerJobRecord { return { id: row.id, organizationId: row.organization_id, workerId: row.worker_id, operation: row.operation, request: row.request, ...(row.result === null ? {} : { result: row.result }), status: row.status, attempt: row.attempt, ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: dateValue(row.lease_expires_at) }), createdAt: dateValue(row.created_at), updatedAt: dateValue(row.updated_at) }; }
 interface SecretRow { id: string; organization_id: string; project_id: string | null; environment_id: string | null; name: string; provider: string; external_reference: string | null; encrypted_value: string | null; rotated_at: Date | null; created_at: Date; }
 function secretFromRow(row: SecretRow, rotatedValue?: string): SecretRecord { return { id: row.id, organizationId: row.organization_id, ...(row.project_id === null ? {} : { projectId: row.project_id }), ...(row.environment_id === null ? {} : { environmentId: row.environment_id }), name: row.name, provider: row.provider, ...(row.external_reference === null ? {} : { externalReference: row.external_reference }), maskedValue: rotatedValue === undefined ? row.encrypted_value === null ? '[EXTERNAL]' : '[REDACTED]' : maskValue(rotatedValue), ...(row.rotated_at === null ? {} : { rotatedAt: dateValue(row.rotated_at) }), createdAt: dateValue(row.created_at) }; }
 function maskValue(value: string): string { return value.length <= 4 ? '[REDACTED]' : `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`; }

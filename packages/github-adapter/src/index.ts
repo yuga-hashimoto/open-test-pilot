@@ -86,6 +86,9 @@ export interface GitHubCheckRun { id: number; htmlUrl?: string; }
 export interface GitHubPullRequestInput { title: string; head: string; base: string; body?: string; draft?: boolean; }
 export interface GitHubPullRequest { number: number; htmlUrl: string; head: string; base: string; }
 export interface GitHubCommitFileInput { branch: string; path: string; content: string; message: string; sha?: string; }
+export interface GitHubBranch { name: string; sha: string; }
+export interface GitHubCompareFile { filename: string; status: string; additions: number; deletions: number; changes: number; }
+export interface GitHubBranchComparison { status: string; aheadBy: number; behindBy: number; htmlUrl?: string; files: GitHubCompareFile[]; }
 
 export class GitHubApiClient {
   public constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
@@ -122,6 +125,16 @@ export class GitHubApiClient {
       if (body.total_count === undefined && pageItems.length < 100) return repositories;
       page += 1;
     }
+  }
+
+  public async listBranches(owner: string, repository: string): Promise<GitHubBranch[]> {
+    const body = await this.request<{ branches?: Array<{ name?: string; commit?: { sha?: string } }> }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100`, { method: 'GET' });
+    return (body.branches ?? []).flatMap((branch) => branch.name === undefined || branch.commit?.sha === undefined ? [] : [{ name: branch.name, sha: branch.commit.sha }]);
+  }
+
+  public async compareBranches(owner: string, repository: string, base: string, head: string): Promise<GitHubBranchComparison> {
+    const body = await this.request<{ status?: string; ahead_by?: number; behind_by?: number; html_url?: string; files?: Array<{ filename?: string; status?: string; additions?: number; deletions?: number; changes?: number }> }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/compare/${encodeURIComponent(`${base}...${head}`)}`, { method: 'GET' });
+    return { status: body.status ?? 'unknown', aheadBy: body.ahead_by ?? 0, behindBy: body.behind_by ?? 0, ...(body.html_url === undefined ? {} : { htmlUrl: body.html_url }), files: (body.files ?? []).flatMap((file) => file.filename === undefined ? [] : [{ filename: file.filename, status: file.status ?? 'modified', additions: file.additions ?? 0, deletions: file.deletions ?? 0, changes: file.changes ?? 0 }]) };
   }
 
   public async createBranch(owner: string, repository: string, branch: string, baseSha: string): Promise<void> {

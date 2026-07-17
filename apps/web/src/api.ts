@@ -11,11 +11,14 @@ export interface ApiChangeRequest { id: string; title: string; description: stri
 export interface ApiRepository { id: string; owner: string; name: string; fullName: string; defaultBranch: string; private: boolean; provider: string; githubRepositoryId?: number; installationId?: number; createdAt: string; }
 export interface ApiRunner { runnerId: string; organizationId: string; name: string; capabilities: { browsers: string[]; maxConcurrency: number; labels?: string[]; [key: string]: unknown }; heartbeatAt: string; }
 export interface ApiPullRequest { number: number; htmlUrl: string; head: string; base: string; }
+export interface ApiBranch { name: string; sha: string; }
+export interface ApiBranchComparison { status: string; aheadBy: number; behindBy: number; htmlUrl?: string; files: Array<{ filename: string; status: string; additions: number; deletions: number; changes: number }>; }
 export interface ApiProject { id: string; organizationId: string; name: string; createdAt: string; }
 export interface ApiMember { organizationId: string; userId: string; githubUserId: string; login: string; role: string; createdAt: string; }
 export interface ApiAuditEvent { id: string; organizationId: string; action: string; resourceType: string; resourceId?: string; metadata: Record<string, unknown>; createdAt: string; }
 export interface ApiStoragePolicy { organizationId: string; successRetentionDays: number; failureRetentionDays: number; fixedRetention: boolean; generatedCodeRetentionDays: number; capacityBytes?: number; updatedAt: string; }
 export interface ApiAiWorker { id: string; organizationId: string; name: string; policy: Record<string, unknown>; lastHeartbeatAt?: string; createdAt: string; }
+export interface ApiAiWorkerJob { id: string; organizationId: string; workerId: string; operation: string; request: Record<string, unknown>; result?: Record<string, unknown>; status: 'queued' | 'leased' | 'completed' | 'failed' | 'cancelled'; attempt: number; leaseExpiresAt?: string; createdAt: string; updatedAt?: string; }
 export interface ApiSecret { id: string; organizationId: string; projectId?: string; environmentId?: string; name: string; provider: string; externalReference?: string; maskedValue: string; rotatedAt?: string; createdAt: string; }
 
 export interface TestPilotApi {
@@ -26,6 +29,7 @@ export interface TestPilotApi {
   getStoragePolicy(): Promise<ApiStoragePolicy>;
   updateStoragePolicy(patch: Partial<Pick<ApiStoragePolicy, 'successRetentionDays' | 'failureRetentionDays' | 'fixedRetention' | 'generatedCodeRetentionDays' | 'capacityBytes'>>): Promise<ApiStoragePolicy>;
   listAiWorkers(): Promise<ApiAiWorker[]>;
+  listAiWorkerJobs(): Promise<ApiAiWorkerJob[]>;
   listSecrets(): Promise<ApiSecret[]>;
   createSecret(input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<ApiSecret>;
   rotateSecret(secretId: string, value: string): Promise<ApiSecret>;
@@ -41,6 +45,8 @@ export interface TestPilotApi {
   updateManifest(testId: string, manifest: ApiTestManifest): Promise<{ testId: string; saved: boolean }>;
   listRepositories(): Promise<ApiRepository[]>;
   syncRepository(repositoryId: string): Promise<ApiRepository>;
+  listBranches(repositoryId: string): Promise<ApiBranch[]>;
+  compareBranches(repositoryId: string, base: string, head: string): Promise<{ repositoryId: string; base: string; head: string; comparison: ApiBranchComparison }>;
   createGitHubPullRequest(repositoryId: string, input: { title: string; head: string; base?: string; body?: string; draft?: boolean }): Promise<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>;
   listChangeRequests(): Promise<ApiChangeRequest[]>;
   createChangeRequest(title: string, description?: string): Promise<ApiChangeRequest>;
@@ -77,6 +83,7 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async getStoragePolicy() { return await request<ApiStoragePolicy>(`/v1/organizations/${pathId(config.organizationId)}/storage-policy`); },
     async updateStoragePolicy(patch) { return await request<ApiStoragePolicy>(`/v1/organizations/${pathId(config.organizationId)}/storage-policy`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },
     async listAiWorkers() { return (await request<{ workers: ApiAiWorker[] }>(`/v1/organizations/${pathId(config.organizationId)}/ai-workers`)).workers; },
+    async listAiWorkerJobs() { return (await request<{ jobs: ApiAiWorkerJob[] }>(`/v1/organizations/${pathId(config.organizationId)}/ai-worker-jobs`)).jobs; },
     async listSecrets() { return (await request<{ secrets: ApiSecret[] }>(`/v1/organizations/${pathId(config.organizationId)}/secrets`)).secrets; },
     async createSecret(input) { return await request<ApiSecret>(`/v1/organizations/${pathId(config.organizationId)}/secrets`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async rotateSecret(secretId, value) { return await request<ApiSecret>(`/v1/secrets/${pathId(secretId)}/rotate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value }) }); },
@@ -92,6 +99,8 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async updateManifest(testId, manifest) { return await request<{ testId: string; saved: boolean }>(`/v1/tests/${pathId(testId)}/manifest`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(manifest) }); },
     async listRepositories() { return (await request<{ repositories: ApiRepository[] }>(`/v1/organizations/${pathId(config.organizationId)}/repositories`)).repositories; },
     async syncRepository(repositoryId) { return await request<ApiRepository>(`/v1/repositories/${pathId(repositoryId)}/sync`, { method: 'POST' }); },
+    async listBranches(repositoryId) { return (await request<{ repositoryId: string; branches: ApiBranch[] }>(`/v1/repositories/${pathId(repositoryId)}/branches`)).branches; },
+    async compareBranches(repositoryId, base, head) { return await request<{ repositoryId: string; base: string; head: string; comparison: ApiBranchComparison }>(`/v1/repositories/${pathId(repositoryId)}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`); },
     async createGitHubPullRequest(repositoryId, input) { return await request<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async listChangeRequests() { return (await request<{ changeRequests: ApiChangeRequest[] }>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`)).changeRequests; },
     async createChangeRequest(title, description) { return await request<ApiChangeRequest>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, ...(description === undefined ? {} : { description }) }) }); },

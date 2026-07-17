@@ -108,6 +108,25 @@ describe('OpenTestPilot server API', () => {
     await app.close();
   });
 
+  it('runs an AI worker job through create, lease, and complete states', async () => {
+    const app = buildServer(new InMemoryTenantRepository());
+    const organizationId = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'AI jobs' } })).json<{ id: string }>().id;
+    const workerId = (await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/ai-workers`, headers: { 'x-organization-id': organizationId }, payload: { name: 'codex-worker' } })).json<{ id: string }>().id;
+    const created = await app.inject({ method: 'POST', url: `/v1/organizations/${organizationId}/ai-worker-jobs`, headers: { 'x-organization-id': organizationId }, payload: { workerId, operation: 'analyze-failure', request: { requestId: 'repair-api-1', protocolVersion: '1.0.0' } } });
+    expect(created.statusCode).toBe(201);
+    const jobId = created.json<{ id: string; status: string }>().id;
+    expect(created.json<{ status: string }>().status).toBe('queued');
+    const leased = await app.inject({ method: 'POST', url: `/v1/ai-workers/${workerId}/jobs/lease`, headers: { 'x-organization-id': organizationId } });
+    expect(leased.statusCode).toBe(200);
+    expect(leased.json<{ job: { id: string; status: string } }>().job).toMatchObject({ id: jobId, status: 'leased' });
+    const completed = await app.inject({ method: 'POST', url: `/v1/ai-worker-jobs/${jobId}/complete`, headers: { 'x-organization-id': organizationId }, payload: { status: 'completed', result: { findings: [{ type: 'verified' }] } } });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json<{ status: string }>().status).toBe('completed');
+    const jobs = await app.inject({ method: 'GET', url: `/v1/organizations/${organizationId}/ai-worker-jobs`, headers: { 'x-organization-id': organizationId } });
+    expect(jobs.json<{ jobs: Array<{ id: string; result?: { findings: unknown[] } }> }>().jobs[0]).toMatchObject({ id: jobId, result: { findings: [{ type: 'verified' }] } });
+    await app.close();
+  });
+
   it('creates an organization and denies a cross-organization read', async () => {
     const app = buildServer();
     const first = await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'First' } });
@@ -528,6 +547,20 @@ describe('repository persistence and sync', () => {
     const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'o', name: 'r' } })).json<{ id: string }>();
     const result = await app.inject({ method: 'POST', url: `/v1/repositories/${repo.id}/pull-requests`, headers: { 'x-organization-id': org }, payload: { title: 'Repair', head: 'testpilot/repair' } });
     expect(result.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it('exposes tenant-safe branch and comparison read gates', async () => {
+    delete process.env['GITHUB_APP_ID'];
+    delete process.env['GITHUB_PRIVATE_KEY_PATH'];
+    delete process.env['GITHUB_INSTALLATION_ID'];
+    const app = buildServer();
+    const org = (await app.inject({ method: 'POST', url: '/v1/organizations', payload: { name: 'NoBranchApp' } })).json<{ id: string }>().id;
+    const repo = (await app.inject({ method: 'POST', url: `/v1/organizations/${org}/repositories`, headers: { 'x-organization-id': org }, payload: { owner: 'o', name: 'r' } })).json<{ id: string }>();
+    const branches = await app.inject({ method: 'GET', url: `/v1/repositories/${repo.id}/branches`, headers: { 'x-organization-id': org } });
+    const comparison = await app.inject({ method: 'GET', url: `/v1/repositories/${repo.id}/compare?base=main&head=repair`, headers: { 'x-organization-id': org } });
+    expect(branches.statusCode).toBe(503);
+    expect(comparison.statusCode).toBe(503);
     await app.close();
   });
 });

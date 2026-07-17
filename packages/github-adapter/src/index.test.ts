@@ -50,6 +50,19 @@ describe('GitHub adapter', () => {
     expect(requests).toHaveLength(2);
   });
 
+  it('reads branches and a focused branch comparison for repository diff views', async () => {
+    const requests: string[] = [];
+    const client = new GitHubApiClient('installation-token', async (input) => {
+      const url = String(input);
+      requests.push(url);
+      const body = url.includes('/compare/') ? { status: 'ahead', ahead_by: 2, behind_by: 0, html_url: 'https://github.com/org/repo/compare/main...repair', files: [{ filename: 'tests/login.yaml', status: 'modified', additions: 3, deletions: 1, changes: 4 }] } : { branches: [{ name: 'main', commit: { sha: 'base-sha' } }, { name: 'repair', commit: { sha: 'head-sha' } }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    await expect(client.listBranches('org', 'repo')).resolves.toEqual([{ name: 'main', sha: 'base-sha' }, { name: 'repair', sha: 'head-sha' }]);
+    await expect(client.compareBranches('org', 'repo', 'main', 'repair')).resolves.toMatchObject({ status: 'ahead', aheadBy: 2, files: [{ filename: 'tests/login.yaml', additions: 3 }] });
+    expect(requests).toEqual(expect.arrayContaining(['https://api.github.com/repos/org/repo/branches?per_page=100', 'https://api.github.com/repos/org/repo/compare/main...repair']));
+  });
+
   it('resolves the authenticated OAuth user without returning the OAuth token', async () => {
     const client = new GitHubApiClient('oauth-token', async (input, init) => {
       expect(String(input)).toBe('https://api.github.com/user');

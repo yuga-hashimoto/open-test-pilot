@@ -119,6 +119,20 @@ export interface AiWorkerRecord {
   createdAt: string;
 }
 
+export interface AiWorkerJobRecord {
+  id: string;
+  organizationId: string;
+  workerId: string;
+  operation: string;
+  request: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  status: 'queued' | 'leased' | 'completed' | 'failed' | 'cancelled';
+  attempt: number;
+  leaseExpiresAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface SecretRecord {
   id: string;
   organizationId: string;
@@ -179,6 +193,10 @@ export interface TenantRepository {
   createAiWorker(organizationId: string, name: string, policy: Record<string, unknown>): MaybePromise<AiWorkerRecord>;
   listAiWorkers(organizationId: string): MaybePromise<AiWorkerRecord[]>;
   heartbeatAiWorker(organizationId: string, id: string): MaybePromise<AiWorkerRecord | undefined>;
+  createAiWorkerJob(organizationId: string, workerId: string, operation: string, request: Record<string, unknown>): MaybePromise<AiWorkerJobRecord>;
+  leaseAiWorkerJob(workerId: string, organizationId: string): MaybePromise<AiWorkerJobRecord | undefined>;
+  completeAiWorkerJob(organizationId: string, jobId: string, status: 'completed' | 'failed' | 'cancelled', result?: Record<string, unknown>): MaybePromise<AiWorkerJobRecord | undefined>;
+  listAiWorkerJobs(organizationId: string): MaybePromise<AiWorkerJobRecord[]>;
   createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): MaybePromise<SecretRecord>;
   listSecrets(organizationId: string): MaybePromise<SecretRecord[]>;
   rotateSecret(organizationId: string, id: string, value: string): MaybePromise<SecretRecord | undefined>;
@@ -204,6 +222,7 @@ export class InMemoryTenantRepository implements TenantRepository {
   private readonly memberships = new Map<string, OrganizationMemberRecord>();
   private readonly storagePolicies = new Map<string, StoragePolicyRecord>();
   private readonly aiWorkers = new Map<string, AiWorkerRecord>();
+  private readonly aiWorkerJobs = new Map<string, AiWorkerJobRecord>();
   private readonly secrets = new Map<string, SecretRecord>();
   private readonly secretValues = new Map<string, string>();
 
@@ -357,6 +376,41 @@ export class InMemoryTenantRepository implements TenantRepository {
     return updated;
   }
 
+  createAiWorkerJob(organizationId: string, workerId: string, operation: string, request: Record<string, unknown>): AiWorkerJobRecord {
+    const job: AiWorkerJobRecord = { id: `aijob-${randomUUID()}`, organizationId, workerId, operation, request, status: 'queued', attempt: 0, createdAt: new Date().toISOString() };
+    this.aiWorkerJobs.set(job.id, job);
+    return job;
+  }
+
+  leaseAiWorkerJob(workerId: string, organizationId: string): AiWorkerJobRecord | undefined {
+    const now = Date.now();
+    for (const job of this.aiWorkerJobs.values()) {
+      if (job.organizationId === organizationId && job.workerId === workerId && job.status === 'leased' && job.leaseExpiresAt !== undefined && Date.parse(job.leaseExpiresAt) <= now) {
+        const { leaseExpiresAt: _leaseExpiresAt, ...withoutLease } = job;
+        this.aiWorkerJobs.set(job.id, { ...withoutLease, status: 'queued', updatedAt: new Date(now).toISOString() });
+      }
+    }
+    const queued = [...this.aiWorkerJobs.values()].find((job) => job.workerId === workerId && job.organizationId === organizationId && job.status === 'queued');
+    if (queued === undefined) return undefined;
+    const leased = { ...queued, status: 'leased' as const, attempt: queued.attempt + 1, leaseExpiresAt: new Date(now + 5 * 60 * 1000).toISOString(), updatedAt: new Date(now).toISOString() };
+    this.aiWorkerJobs.set(leased.id, leased);
+    return leased;
+  }
+
+  completeAiWorkerJob(organizationId: string, jobId: string, status: 'completed' | 'failed' | 'cancelled', result?: Record<string, unknown>): AiWorkerJobRecord | undefined {
+    const job = this.aiWorkerJobs.get(jobId);
+    if (job === undefined || job.organizationId !== organizationId) return undefined;
+    if (job.status !== 'leased') return undefined;
+    const { leaseExpiresAt: _leaseExpiresAt, ...withoutLease } = job;
+    const completed = { ...withoutLease, status, ...(result === undefined ? {} : { result }), updatedAt: new Date().toISOString() };
+    this.aiWorkerJobs.set(jobId, completed);
+    return completed;
+  }
+
+  listAiWorkerJobs(organizationId: string): AiWorkerJobRecord[] {
+    return [...this.aiWorkerJobs.values()].filter((job) => job.organizationId === organizationId);
+  }
+
   async createSecret(organizationId: string, input: { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }): Promise<SecretRecord> {
     const secret: SecretRecord = { id: `secret-${randomUUID()}`, organizationId, name: input.name, provider: input.provider, maskedValue: input.value === undefined ? '[EXTERNAL]' : maskSecretForApi(input.value), createdAt: new Date().toISOString(), ...(input.projectId === undefined ? {} : { projectId: input.projectId }), ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }), ...(input.externalReference === undefined ? {} : { externalReference: input.externalReference }) };
     this.secrets.set(secret.id, secret);
@@ -463,8 +517,11 @@ interface CreateOrganizationBody { name: string }
 interface CreateProjectBody { name: string }
 interface UpdateStoragePolicyBody { successRetentionDays?: number; failureRetentionDays?: number; fixedRetention?: boolean; generatedCodeRetentionDays?: number; capacityBytes?: number | null }
 interface CreateAiWorkerBody { name: string; policy?: Record<string, unknown> }
+interface CreateAiWorkerJobBody { workerId: string; operation: string; request: Record<string, unknown> }
+interface CompleteAiWorkerJobBody { status: 'completed' | 'failed' | 'cancelled'; result?: Record<string, unknown> }
 interface CreateSecretBody { name: string; provider: string; projectId?: string; environmentId?: string; externalReference?: string; value?: string }
 interface RotateSecretBody { value: string }
+interface CompareBranchesQuery { base?: string; head?: string }
 interface CreateTestBody { projectId: string; name: string; manifestId: string; manifest?: unknown }
 interface CreateRunBody { projectId: string; testId: string; priority?: number; requiredLabels?: string[] }
 interface TenantHeaders { 'x-organization-id'?: string }
@@ -648,6 +705,42 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     return reply.send(worker);
   });
 
+  app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateAiWorkerJobBody }>('/v1/organizations/:organizationId/ai-worker-jobs', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    const body = request.body;
+    if (typeof body?.workerId !== 'string' || typeof body.operation !== 'string' || body.operation.trim() === '' || body.request === null || typeof body.request !== 'object' || Array.isArray(body.request)) return reply.code(400).send({ error: 'workerId, operation, and an object request are required' });
+    if (!(await repository.listAiWorkers(request.params.organizationId)).some((worker) => worker.id === body.workerId)) return reply.code(404).send({ error: 'AI worker not found' });
+    const job = await repository.createAiWorkerJob(request.params.organizationId, body.workerId, body.operation.trim(), body.request);
+    await repository.recordAuditEvent(request.params.organizationId, 'ai_worker_job.created', 'ai_worker_job', job.id, { workerId: job.workerId, operation: job.operation });
+    return reply.code(201).send(job);
+  });
+
+  app.get<{ Params: OrganizationParams; Headers: TenantHeaders }>('/v1/organizations/:organizationId/ai-worker-jobs', async (request, reply) => {
+    if (!requireTenant(request, reply, request.params.organizationId)) return reply;
+    return reply.send({ jobs: await repository.listAiWorkerJobs(request.params.organizationId) });
+  });
+
+  app.post<{ Params: { workerId: string }; Headers: TenantHeaders }>('/v1/ai-workers/:workerId/jobs/lease', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const worker = await repository.heartbeatAiWorker(organizationId, request.params.workerId);
+    if (worker === undefined) return reply.code(404).send({ error: 'AI worker not found' });
+    const job = await repository.leaseAiWorkerJob(request.params.workerId, organizationId);
+    if (job !== undefined) await repository.recordAuditEvent(organizationId, 'ai_worker_job.leased', 'ai_worker_job', job.id, { workerId: job.workerId, attempt: job.attempt });
+    return reply.send({ job: job ?? null });
+  });
+
+  app.post<{ Params: { jobId: string }; Headers: TenantHeaders; Body: CompleteAiWorkerJobBody }>('/v1/ai-worker-jobs/:jobId/complete', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    if (!['completed', 'failed', 'cancelled'].includes(request.body?.status)) return reply.code(400).send({ error: 'status must be completed, failed, or cancelled' });
+    if (request.body?.result !== undefined && (request.body.result === null || typeof request.body.result !== 'object' || Array.isArray(request.body.result))) return reply.code(400).send({ error: 'result must be an object' });
+    const job = await repository.completeAiWorkerJob(organizationId, request.params.jobId, request.body.status, request.body.result);
+    if (job === undefined) return reply.code(404).send({ error: 'leased AI worker job not found' });
+    await repository.recordAuditEvent(organizationId, `ai_worker_job.${job.status}`, 'ai_worker_job', job.id, { workerId: job.workerId, attempt: job.attempt });
+    return reply.send(job);
+  });
+
   app.post<{ Params: OrganizationParams; Headers: TenantHeaders; Body: CreateSecretBody }>('/v1/organizations/:organizationId/secrets', async (request, reply) => {
     if (!requireTenant(request, reply, request.params.organizationId)) return reply;
     const body = request.body;
@@ -735,6 +828,47 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
       const metadata = await github.getRepository(record.owner, record.name);
       const updated = await repository.updateRepository(organizationId, record.id, { fullName: metadata.fullName, defaultBranch: metadata.defaultBranch, private: metadata.private, githubRepositoryId: metadata.id, installationId });
       return updated === undefined ? reply.code(404).send({ error: 'repository not found' }) : reply.send(updated);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders }>('/v1/repositories/:repositoryId/branches', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support branches' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App branches are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const branches = await new GitHubApiClient(installationToken.token).listBranches(record.owner, record.name);
+      return reply.send({ repositoryId: record.id, branches });
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get<{ Params: { repositoryId: string }; Headers: TenantHeaders; Querystring: CompareBranchesQuery }>('/v1/repositories/:repositoryId/compare', async (request, reply) => {
+    const organizationId = tenantId(request);
+    if (organizationId === undefined) return reply.code(401).send({ error: 'organization context required' });
+    const record = await repository.getRepository(organizationId, request.params.repositoryId);
+    if (record === undefined) return reply.code(404).send({ error: 'repository not found' });
+    if (record.provider !== 'github') return reply.code(400).send({ error: 'repository provider does not support comparisons' });
+    if (typeof request.query.base !== 'string' || request.query.base.trim() === '' || typeof request.query.head !== 'string' || request.query.head.trim() === '') return reply.code(400).send({ error: 'base and head are required' });
+    const appId = process.env['GITHUB_APP_ID'];
+    const privateKeyPath = process.env['GITHUB_PRIVATE_KEY_PATH'];
+    const installationId = record.installationId ?? parseInstallationId(process.env['GITHUB_INSTALLATION_ID']);
+    if (appId === undefined || privateKeyPath === undefined || installationId === undefined) return reply.code(503).send({ error: 'GitHub App comparisons are not configured' });
+    try {
+      const privateKey = await readFile(privateKeyPath, 'utf8');
+      const installationToken = await createGitHubInstallationToken(installationId, { appId, privateKey });
+      const comparison = await new GitHubApiClient(installationToken.token).compareBranches(record.owner, record.name, request.query.base.trim(), request.query.head.trim());
+      return reply.send({ repositoryId: record.id, base: request.query.base.trim(), head: request.query.head.trim(), comparison });
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -1140,11 +1274,16 @@ export function buildServer(repository: TenantRepository = createConfiguredRepos
     '/v1/organizations/{organizationId}/storage-policy': { get: {}, put: {} },
     '/v1/organizations/{organizationId}/ai-workers': { get: {}, post: {} },
     '/v1/ai-workers/{workerId}/heartbeat': { post: {} },
+    '/v1/organizations/{organizationId}/ai-worker-jobs': { get: {}, post: {} },
+    '/v1/ai-workers/{workerId}/jobs/lease': { post: {} },
+    '/v1/ai-worker-jobs/{jobId}/complete': { post: {} },
     '/v1/organizations/{organizationId}/secrets': { get: {}, post: {} },
     '/v1/secrets/{secretId}/rotate': { post: {} },
     '/v1/organizations/{organizationId}/repositories': { get: {}, post: {} },
     '/v1/repositories/{repositoryId}': { get: {} },
     '/v1/repositories/{repositoryId}/sync': { post: {} },
+    '/v1/repositories/{repositoryId}/branches': { get: {} },
+    '/v1/repositories/{repositoryId}/compare': { get: {} },
     '/v1/repositories/{repositoryId}/pull-requests': { post: {} },
     '/v1/organizations/{organizationId}/tests': { get: {}, post: {} },
     '/v1/tests/{id}': { get: {} },

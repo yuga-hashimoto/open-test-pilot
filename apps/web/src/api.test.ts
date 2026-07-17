@@ -59,6 +59,14 @@ describe('web API client', () => {
     expect(calls[1]?.init?.body).toContain('testpilot/repair');
   });
 
+  it('loads GitHub branches and a comparison for diff review', async () => {
+    const calls: string[] = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input) => { calls.push(String(input)); const body = String(input).includes('/compare') ? { repositoryId: 'repo-1', base: 'main', head: 'repair', comparison: { status: 'ahead', aheadBy: 1, behindBy: 0, files: [] } } : { repositoryId: 'repo-1', branches: [{ name: 'main', sha: 'sha-1' }] }; return new Response(JSON.stringify(body), { status: 200 }); });
+    await expect(api.listBranches('repo-1')).resolves.toEqual([{ name: 'main', sha: 'sha-1' }]);
+    await expect(api.compareBranches('repo-1', 'main', 'repair')).resolves.toMatchObject({ base: 'main', head: 'repair' });
+    expect(calls).toEqual(['https://pilot.test/v1/repositories/repo-1/branches', 'https://pilot.test/v1/repositories/repo-1/compare?base=main&head=repair']);
+  });
+
   it('loads and updates the tenant administration surface', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {
@@ -68,7 +76,8 @@ describe('web API client', () => {
         : url.endsWith('/members') ? { members: [] }
           : url.endsWith('/audit-logs') ? { events: [] }
             : url.endsWith('/storage-policy') ? { organizationId: 'org-1', successRetentionDays: 30, failureRetentionDays: 180, fixedRetention: false, generatedCodeRetentionDays: 30, updatedAt: new Date().toISOString() }
-              : { workers: [] };
+              : url.endsWith('/ai-worker-jobs') ? { jobs: [] }
+                : { workers: [] };
       return new Response(JSON.stringify(body), { status: 200 });
     });
     await api.listProjects();
@@ -77,12 +86,14 @@ describe('web API client', () => {
     await api.getStoragePolicy();
     await api.updateStoragePolicy({ successRetentionDays: 7 });
     await api.listAiWorkers();
+    await api.listAiWorkerJobs();
     expect(calls.map((call) => call.url)).toEqual(expect.arrayContaining([
       'https://pilot.test/v1/organizations/org-1/projects',
       'https://pilot.test/v1/organizations/org-1/members',
       'https://pilot.test/v1/organizations/org-1/audit-logs',
       'https://pilot.test/v1/organizations/org-1/storage-policy',
       'https://pilot.test/v1/organizations/org-1/ai-workers',
+      'https://pilot.test/v1/organizations/org-1/ai-worker-jobs',
     ]));
     expect(calls.find((call) => call.url.endsWith('/storage-policy') && call.init?.method === 'PUT')?.init?.body).toContain('7');
   });
