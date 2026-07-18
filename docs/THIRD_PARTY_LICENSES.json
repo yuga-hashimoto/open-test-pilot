@@ -3319,6 +3319,11 @@
     {
       "license": "MIT",
       "name": "wrap-ansi",
+      "version": "8.1.0"
+    },
+    {
+      "license": "MIT",
+      "name": "wrap-ansi",
       "version": "9.0.2"
     },
     {
