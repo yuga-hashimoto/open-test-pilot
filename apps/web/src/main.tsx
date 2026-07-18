@@ -35,6 +35,7 @@ import {
 import { getOrganizationDisplayName } from "./organization.js";
 import { LocaleContext, translate, useLocale, useLocaleState, type LocaleApi } from "./i18n.js";
 import "./style.css";
+import "./usability.css";
 
 type Status = "passed" | "failed" | "running" | "cancelled";
 interface Run {

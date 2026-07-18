@@ -1,0 +1,345 @@
+:root {
+  --focus-ring: #b8c7ff;
+  --control-min-height: 40px;
+  --mobile-control-min-height: 44px;
+  --page-gutter: clamp(16px, 3vw, 38px);
+}
+
+html,
+body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.nav-item,
+.project-select,
+.icon-button,
+.run-button,
+.login-github-button,
+.organization-create input {
+  min-height: var(--control-min-height);
+}
+
+.connection-state,
+.brand small,
+.project-select small,
+.profile small,
+.runner-caption,
+.metric-copy small,
+.activity-item time,
+.evidence-label,
+.evidence-footer,
+footer {
+  font-size: 11px;
+}
+
+.workspace-label,
+.eyebrow,
+.table-head {
+  font-size: 10px;
+}
+
+.nav-item,
+.live-list-row b,
+.panel-header p,
+.text-button,
+.activity-item b,
+.activity-item span,
+.run-row,
+.pill,
+.editor-view-tabs button,
+.manifest-tree,
+.manifest-code,
+.graph-node b,
+.graph-node small,
+.login-card p,
+.empty-state p {
+  font-size: 12px;
+}
+
+.panel-header h2 {
+  font-size: 15px;
+}
+
+.metric-copy > span {
+  font-size: 12px;
+}
+
+.live-list-row span,
+.profile b {
+  font-size: 12px;
+}
+
+.nav-item {
+  font-size: 13px;
+}
+
+.run-button {
+  padding-inline: 15px;
+  font-size: 12px;
+}
+
+.text-button {
+  min-height: 36px;
+  padding: 8px 2px;
+}
+
+.live-list,
+.empty-state,
+.empty-state.compact,
+.editor-panel,
+.evidence-panel {
+  min-height: 0;
+}
+
+.empty-state,
+.empty-state.compact {
+  padding: 48px 20px;
+}
+
+.run-table,
+.editor-view-tabs {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.table-head,
+.run-row {
+  min-width: 680px;
+}
+
+.editor-view-tabs {
+  flex-wrap: nowrap;
+  padding-bottom: 12px;
+}
+
+.editor-view-tabs button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding-inline: 12px;
+}
+
+.tests-layout > *,
+.settings-grid > *,
+.content-grid > *,
+.bottom-grid > * {
+  min-width: 0;
+}
+
+.monaco-editor-shell,
+.manifest-tree,
+.manifest-code,
+.manifest-graph {
+  max-width: calc(100% - 34px);
+}
+
+@media (max-width: 1199px) {
+  .main-content {
+    max-width: none;
+    padding-inline: var(--page-gutter);
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tests-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .content-grid,
+  .bottom-grid,
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid .panel:last-child {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --page-gutter: 14px;
+  }
+
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 1fr);
+    width: 100%;
+    min-height: 0;
+    padding: 12px 14px;
+    border-right: 0;
+    border-bottom: 1px solid #182b40;
+    box-shadow: 0 10px 28px rgb(2 9 18 / 32%);
+  }
+
+  .brand {
+    min-width: 0;
+    padding: 0;
+  }
+
+  .brand small,
+  .workspace-label,
+  .sidebar-spacer,
+  .runner-card,
+  .profile {
+    display: none;
+  }
+
+  .project-select {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .sidebar nav {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 4px;
+    margin-top: 10px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+  }
+
+  .sidebar nav .nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: var(--mobile-control-min-height);
+    margin: 0;
+    padding: 10px 14px;
+  }
+
+  .sidebar nav .nav-item.active {
+    box-shadow: inset 0 -2px var(--accent);
+  }
+
+  .sidebar > .nav-item {
+    min-height: var(--mobile-control-min-height);
+    margin: 8px 0 0;
+  }
+
+  .main-content {
+    width: 100%;
+    padding: 20px var(--page-gutter) 16px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .topbar h1 {
+    font-size: 25px;
+  }
+
+  .top-actions {
+    width: 100%;
+  }
+
+  .top-actions .run-button {
+    min-height: var(--mobile-control-min-height);
+    margin-left: auto;
+  }
+
+  .icon-button {
+    width: var(--mobile-control-min-height);
+    height: var(--mobile-control-min-height);
+  }
+
+  .shortcut {
+    display: none;
+  }
+
+  .metric-grid,
+  .content-grid,
+  .bottom-grid,
+  .tests-layout,
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-card {
+    height: auto;
+    min-height: 96px;
+  }
+
+  .panel-header {
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .run-table {
+    padding-inline: 6px;
+  }
+
+  .live-list-body {
+    padding-inline: 16px;
+  }
+
+  .row-actions,
+  .organization-create,
+  .evidence-footer,
+  footer {
+    flex-wrap: wrap;
+  }
+
+  .monaco-editor-shell,
+  .manifest-tree,
+  .manifest-code,
+  .manifest-graph,
+  .editor-window,
+  .evidence-image {
+    width: auto;
+    max-width: none;
+    margin-inline: 12px;
+  }
+
+  .manifest-editor textarea {
+    width: calc(100% - 24px);
+    margin-inline: 12px;
+  }
+
+  .login-card {
+    width: min(386px, calc(100vw - 28px));
+    padding: 30px 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
