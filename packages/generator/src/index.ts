@@ -137,7 +137,10 @@ function indentLines(lines: string[], indent: string): string[] { return lines.m
 function actionLines(action: ManifestAction, manifest: Manifest, indent: string): string[] {
   switch (action.type) {
     case 'web.goto':
-      return [`await page.goto(${valueExpression(action.url ?? '', manifest)});`].map((line) => `${indent}${line}`);
+      return [
+        `await page.goto(${valueExpression(action.url ?? '', manifest)}, { waitUntil: 'domcontentloaded' });`,
+        `await page.waitForLoadState('networkidle').catch(() => undefined);`,
+      ].map((line) => `${indent}${line}`);
     case 'web.fill':
       return [`await ${locatorExpression(action.selector ?? '', action.target)}.fill(${valueExpression(action.value ?? '', manifest)});`].map((line) => `${indent}${line}`);
     case 'web.click':

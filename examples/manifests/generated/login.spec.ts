@@ -50,7 +50,8 @@ test('ログインできる', async ({ page, request }) => {
   const callFunction = async (_name: string, _args: Record<string, unknown>): Promise<void> => { throw new Error(`Unknown Manifest function: ${_name}`); };
   // testpilot:step login
   // testpilot:action open-login
-  await page.goto(process.env['BASE_URL'] ? process.env['BASE_URL'] + '/login' : 'http://127.0.0.1:4173/login');
+  await page.goto(process.env['BASE_URL'] ? process.env['BASE_URL'] + '/login' : 'http://127.0.0.1:4173/login', { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle').catch(() => undefined);
   // testpilot:action fill-email
   await page.getByLabel('メールアドレス').fill('test@example.com');
   // testpilot:action submit-login

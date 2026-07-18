@@ -72,7 +72,8 @@ test('API and Web complex flow', async ({ page, request }) => {
   stepOutputs['create-user'] = { ...Object.fromEntries(["create-user-request"].flatMap((id) => { const output = stepOutputs[id]; return output !== null && typeof output === 'object' ? Object.entries(output as Record<string, unknown>) : []; })), ...resolveAny({}) as Record<string, unknown> };
   // testpilot:step login
   // testpilot:action open-login
-  await page.goto('http://127.0.0.1:4173/login');
+  await page.goto('http://127.0.0.1:4173/login', { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle').catch(() => undefined);
   // testpilot:action fill-email
   await page.getByLabel('メールアドレス').fill(resolveValue('${steps.create-user.email}'));
   // testpilot:action submit-login

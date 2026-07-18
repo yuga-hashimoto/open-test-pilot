@@ -39,7 +39,8 @@ describe('generatePlaywright', () => {
     const output = generatePlaywright(manifest);
     expect(output.code).toContain("import { test, expect } from '@playwright/test';");
     expect(output.code).toContain("test('Login'");
-    expect(output.code).toContain("await page.goto(process.env['BASE_URL'] ? process.env['BASE_URL'] + '/login' : 'http://localhost:3000/login');");
+    expect(output.code).toContain("await page.goto(process.env['BASE_URL'] ? process.env['BASE_URL'] + '/login' : 'http://localhost:3000/login', { waitUntil: 'domcontentloaded' });");
+    expect(output.code).toContain("await page.waitForLoadState('networkidle').catch(() => undefined);");
     expect(output.code).toContain("await page.locator('#email').fill('user@example.com');");
     expect(output.code).toContain("await expect(page.locator('[data-testid=\"dashboard\"]')).toBeVisible();");
     expect(output.sourceMap.nodes).toEqual(

@@ -179,6 +179,11 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
   switch (action.type) {
     case 'web.goto':
       await page.goto(resolveValue(action.url ?? '', manifest, context), { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
+      // domcontentloaded fires before client-side hydration finishes, which lets a fast
+      // fill/click race ahead of the framework attaching its event handlers. Waiting for
+      // networkidle closes that race for typical SPA/SSR hydration without hard-failing
+      // the step if the app keeps a long-lived connection open (polling, websockets).
+      await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => undefined);
       return;
     case 'web.fill':
       await locator(action.selector ?? '').fill(resolveValue(action.value ?? '', manifest, context), { timeout: timeoutMs });
