@@ -33,6 +33,7 @@ import {
   type TestPilotApi,
 } from "./api.js";
 import { getOrganizationDisplayName } from "./organization.js";
+import { LocaleContext, translate, useLocale, useLocaleState, type LocaleApi } from "./i18n.js";
 import "./style.css";
 
 type Status = "passed" | "failed" | "running" | "cancelled";
@@ -122,6 +123,7 @@ function storeSession(session: StoredLoginSession) { localStorage.setItem(SESSIO
 function clearSession() { localStorage.removeItem(SESSION_KEY); }
 
 function LoginPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin: (session: LoginCompleteResult) => void; }) {
+  const { t } = useLocale();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const startLogin = () => {
@@ -130,7 +132,7 @@ function LoginPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin:
     const redirectUri = `${window.location.origin}/auth/github/callback`;
     void createAuthApi(serverBaseUrl).startLogin(redirectUri)
       .then((result) => { window.location.href = result.authorizationUrl; })
-      .catch((e) => { setError(e instanceof Error ? e.message : "Failed to start login"); setLoading(false); });
+      .catch((e) => { setError(e instanceof Error ? e.message : t("login.failedToStart")); setLoading(false); });
   };
   return (
     <div className="login-root">
@@ -139,14 +141,14 @@ function LoginPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin:
           <div className="login-brand-mark">O</div>
           <div>
             <strong>OpenTestPilot</strong>
-            <small>QA control plane</small>
+            <small>{t("brand.subtitle")}</small>
           </div>
         </div>
-        <h1>Sign in</h1>
-        <p>Connect your GitHub account to access the team dashboard.</p>
+        <h1>{t("login.title")}</h1>
+        <p>{t("login.subtitle")}</p>
         <button className="login-github-button" onClick={startLogin} disabled={loading}>
           <span className="login-github-icon" aria-hidden="true" />
-          {loading ? "Redirecting to GitHub…" : "Sign in with GitHub"}
+          {loading ? t("login.redirecting") : t("login.button")}
         </button>
         {error !== undefined && <span className="login-error">{error}</span>}
       </div>
@@ -155,16 +157,17 @@ function LoginPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin:
 }
 
 function CallbackPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLogin: (session: LoginCompleteResult) => void; }) {
+  const { t } = useLocale();
   const [error, setError] = useState<string>();
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     const state = params.get("state");
-    if (code === null || state === null) { setError("Missing OAuth callback parameters. Please try signing in again."); return; }
+    if (code === null || state === null) { setError(t("callback.missingParams")); return; }
     void createAuthApi(serverBaseUrl).completeLogin(code, state)
       .then((session) => { storeSession(session); onLogin(session); })
-      .catch((e) => { setError(e instanceof Error ? e.message : "Failed to complete login"); });
-  }, [serverBaseUrl, onLogin]);
+      .catch((e) => { setError(e instanceof Error ? e.message : t("callback.failedToComplete")); });
+  }, [serverBaseUrl, onLogin, t]);
   if (error !== undefined) {
     return (
       <div className="login-root">
@@ -173,10 +176,10 @@ function CallbackPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLog
             <div className="login-brand-mark">O</div>
             <div><strong>OpenTestPilot</strong></div>
           </div>
-          <h1>Sign in failed</h1>
+          <h1>{t("callback.failedTitle")}</h1>
           <p>{error}</p>
           <button className="login-github-button" onClick={() => { window.location.href = "/"; }}>
-            Try again
+            {t("callback.tryAgain")}
           </button>
         </div>
       </div>
@@ -189,14 +192,15 @@ function CallbackPage({ serverBaseUrl, onLogin }: { serverBaseUrl: string; onLog
           <div className="login-brand-mark">O</div>
           <div><strong>OpenTestPilot</strong></div>
         </div>
-        <h1>Completing sign in…</h1>
-        <p>Exchanging authorization code for a session token.</p>
+        <h1>{t("callback.completingTitle")}</h1>
+        <p>{t("callback.completingBody")}</p>
       </div>
     </div>
   );
 }
 
 function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl: string; session: StoredLoginSession; onSelect: (organizationId: string, organizationName: string) => void }) {
+  const { t } = useLocale();
   const [organizations, setOrganizations] = useState<ApiOrganization[]>([]);
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -206,9 +210,9 @@ function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl:
     setLoading(true);
     void authApi.listOrganizations(session.sessionToken)
       .then(setOrganizations)
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to load organizations"))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : t("organization.listFailed")))
       .finally(() => setLoading(false));
-  }, [authApi, session.sessionToken]);
+  }, [authApi, session.sessionToken, t]);
   useEffect(() => { load(); }, [load]);
   const create = () => {
     const trimmed = name.trim();
@@ -216,28 +220,39 @@ function OrganizationPage({ serverBaseUrl, session, onSelect }: { serverBaseUrl:
     setLoading(true);
     void authApi.createOrganization(session.sessionToken, trimmed)
       .then((organization) => onSelect(organization.id, organization.name))
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "Failed to create organization"))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : t("organization.createFailed")))
       .finally(() => setLoading(false));
   };
   return (
     <div className="login-root">
       <div className="login-card">
-        <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong><small>QA control plane</small></div></div>
-        <h1>Select an organization</h1>
-        <p>Choose a workspace for your GitHub account, or create one to start syncing repositories.</p>
+        <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong><small>{t("brand.subtitle")}</small></div></div>
+        <h1>{t("organization.title")}</h1>
+        <p>{t("organization.subtitle")}</p>
         {organizations.map((organization) => <button key={organization.id} className="login-github-button organization-choice" onClick={() => onSelect(organization.id, organization.name)}>{organization.name}</button>)}
         <div className="organization-create">
-          <input aria-label="Organization name" value={name} onChange={(event) => setName(event.target.value)} placeholder="New organization" />
-          <button className="login-github-button" onClick={create} disabled={loading || name.trim().length === 0}>Create</button>
+          <input aria-label={t("organization.nameLabel")} value={name} onChange={(event) => setName(event.target.value)} placeholder={t("organization.namePlaceholder")} />
+          <button className="login-github-button" onClick={create} disabled={loading || name.trim().length === 0}>{t("organization.create")}</button>
         </div>
-        {loading && organizations.length === 0 && <p>Loading organizations…</p>}
+        {loading && organizations.length === 0 && <p>{t("organization.loading")}</p>}
         {error !== undefined && <span className="login-error">{error}</span>}
       </div>
     </div>
   );
 }
 
+const NAV_I18N_KEYS: Record<string, string> = {
+  Overview: "nav.overview",
+  Tests: "nav.tests",
+  Runs: "nav.runs",
+  Runners: "nav.runners",
+  Schedules: "nav.schedules",
+  GitHub: "nav.github",
+  Settings: "nav.settings",
+};
+
 function App({ sessionToken, login, organizationId, organizationName, serverBaseUrl, onLogout }: { sessionToken?: string | undefined; login?: string | undefined; organizationId?: string | undefined; organizationName?: string | undefined; serverBaseUrl?: string | undefined; onLogout?: (() => void) | undefined }) {
+  const { t, locale, setLocale } = useLocale();
   const api = useMemo<TestPilotApi | undefined>(() => {
     const config = getApiConfig();
     const resolvedOrganizationId = organizationId ?? config?.organizationId;
@@ -338,7 +353,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
           setRunners(runnerItems);
           setRepositories(repositoryItems);
           setChangeRequests(changeRequestItems);
-          const liveRuns = runItems.map((run) => runForUi(run, testItems));
+          const liveRuns = runItems.map((run) => runForUi(run, testItems, t));
           setRuns(liveRuns);
           setSelectedRun((current) =>
             current !== undefined &&
@@ -373,6 +388,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
               createdAt: new Date().toISOString(),
             },
             tests,
+            t,
           );
           setRuns((current) => [run, ...current]);
           setSelectedRun(run);
@@ -421,7 +437,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
         setManifestLoading(false);
       })
       .catch(() => {
-        setManifestStatus("Manifest could not be loaded");
+        setManifestStatus(t("app.manifestLoadFailed"));
         setManifestLoading(false);
       });
   };
@@ -432,7 +448,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
     try {
       parsed = parseYaml(manifestText) as ApiTestManifest;
     } catch {
-      setManifestStatus("YAML is invalid");
+      setManifestStatus(t("app.yamlInvalid"));
       return;
     }
     void api
@@ -440,9 +456,9 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
       .then(async () => {
         setManifestBaseline(stringifyYaml(parsed));
         setManifestVersions(await api.listManifestVersions(editingTest.id));
-        setManifestStatus("Saved to team server");
+        setManifestStatus(t("app.savedToServer"));
       })
-      .catch(() => setManifestStatus("Save failed"));
+      .catch(() => setManifestStatus(t("app.saveFailed")));
   };
   return (
     <div className="app-shell">
@@ -451,10 +467,10 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
           <div className="brand-mark">O</div>
           <div>
             <strong>OpenTestPilot</strong>
-            <small>QA control plane</small>
+            <small>{t("brand.subtitle")}</small>
           </div>
         </div>
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">{t("sidebar.workspace")}</div>
         <button className="project-select">
           <span className="project-avatar">S</span>
           <span>
@@ -471,7 +487,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
               onClick={() => setActive(label)}
             >
               <Icon name={icon} />
-              <span>{label}</span>
+              <span>{t(NAV_I18N_KEYS[label] ?? label)}</span>
               {label === "Runs" && (
                 <em>{api === undefined ? 12 : runs.length}</em>
               )}
@@ -482,19 +498,19 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
         <div className="runner-card">
           <div className="runner-card-head">
             <span className="online-dot" />
-            Runner fleet
+            {t("sidebar.runnerFleet")}
           </div>
           <strong>
             {api === undefined ? 3 : runners.length}{" "}
-            <small>/ {api === undefined ? 4 : runners.length} online</small>
+            <small>{t("sidebar.online", { total: api === undefined ? 4 : runners.length })}</small>
           </strong>
           <div className="runner-bar">
             <i />
           </div>
           <span className="runner-caption">
             {api === undefined
-              ? "1 runner is warming up"
-              : `${runners.length} tenant runners registered`}
+              ? t("sidebar.runnerWarming")
+              : t("sidebar.tenantRunners", { n: runners.length })}
           </span>
         </div>
         <button
@@ -502,16 +518,24 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
           onClick={() => setActive("Settings")}
         >
           <Icon name="settings" />
-          <span>Settings</span>
+          <span>{t("nav.settings")}</span>
+        </button>
+        <button
+          className="nav-item locale-switch"
+          onClick={() => setLocale(locale === "ja" ? "en" : "ja")}
+          title={locale === "ja" ? t("locale.switchToEnglish") : t("locale.switchToJapanese")}
+        >
+          <Icon name="chevron" />
+          <span>{locale === "ja" ? "EN" : "日本語"}</span>
         </button>
         <div className="profile">
           <div className="profile-avatar">{login !== undefined ? login.slice(0, 2).toUpperCase() : "YK"}</div>
           <div>
             <b>{login ?? "Yu-ga Kato"}</b>
-            <small>{login !== undefined ? "GitHub" : "Owner"}</small>
+            <small>{login !== undefined ? t("sidebar.github") : t("sidebar.owner")}</small>
           </div>
           {onLogout !== undefined && (
-            <button className="logout-button" onClick={onLogout} title="Sign out">
+            <button className="logout-button" onClick={onLogout} title={t("sidebar.signOut")}>
               <Icon name="more" />
             </button>
           )}
@@ -521,22 +545,22 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
       <main className="main-content">
         <header className="topbar">
           <div>
-            <div className="eyebrow">SHOPFRONT / {active.toUpperCase()}</div>
-            <h1>{active}</h1>
+            <div className="eyebrow">SHOPFRONT / {t(NAV_I18N_KEYS[active] ?? active).toUpperCase()}</div>
+            <h1>{t(NAV_I18N_KEYS[active] ?? active)}</h1>
             <span className={`connection-state ${connection}`}>
               <span />
               {connection === "live"
-                ? "Connected to team server"
+                ? t("topbar.connectedLive")
                 : connection === "error"
-                  ? "API connection failed"
-                  : "Demo data"}
+                  ? t("topbar.connectionError")
+                  : t("topbar.demoData")}
             </span>
           </div>
           <div className="top-actions">
-            <button className="icon-button" aria-label="Search">
+            <button className="icon-button" aria-label={t("topbar.search")}>
               <Icon name="search" />
             </button>
-            <button className="icon-button" aria-label="Notifications">
+            <button className="icon-button" aria-label={t("topbar.notifications")}>
               <Icon name="bell" />
               <span className="notification-badge" />
             </button>
@@ -546,7 +570,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
               disabled={running}
             >
               <Icon name="play" />
-              {running ? "Starting…" : "Run test"}
+              {running ? t("topbar.starting") : t("topbar.runTest")}
               <span className="shortcut">⌘ ↵</span>
             </button>
           </div>
@@ -563,28 +587,28 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             <>
               <section className="metric-grid">
                 <Metric
-                  label="Pass rate"
+                  label={t("overview.passRate")}
                   value="94.8%"
                   change="+2.4%"
                   tone="green"
                   icon="check"
                 />
                 <Metric
-                  label="Runs this week"
+                  label={t("overview.runsThisWeek")}
                   value="128"
                   change="+18"
                   tone="blue"
                   icon="activity"
                 />
                 <Metric
-                  label="Median duration"
+                  label={t("overview.medianDuration")}
                   value="01:08"
                   change="−12s"
                   tone="purple"
                   icon="clock"
                 />
                 <Metric
-                  label="Flaky tests"
+                  label={t("overview.flakyTests")}
                   value="4"
                   change="−2"
                   tone="orange"
@@ -595,23 +619,23 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                 <div className="panel runs-panel">
                   <div className="panel-header">
                     <div>
-                      <h2>Recent runs</h2>
-                      <p>Latest executions across your test suite</p>
+                      <h2>{t("overview.recentRuns")}</h2>
+                      <p>{t("overview.recentRunsSubtitle")}</p>
                     </div>
                     <button
                       className="text-button"
                       onClick={() => setActive("Runs")}
                     >
-                      View all <span>→</span>
+                      {t("overview.viewAll")} <span>→</span>
                     </button>
                   </div>
                   <div className="run-table">
                     <div className="table-head">
-                      <span>TEST</span>
-                      <span>BRANCH</span>
-                      <span>DURATION</span>
-                      <span>STATUS</span>
-                      <span>WHEN</span>
+                      <span>{t("table.test")}</span>
+                      <span>{t("table.branch")}</span>
+                      <span>{t("table.duration")}</span>
+                      <span>{t("table.status")}</span>
+                      <span>{t("table.when")}</span>
                     </div>
                     {runs.map((run) => (
                       <button
@@ -647,28 +671,28 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                 <div className="panel activity-panel">
                   <div className="panel-header">
                     <div>
-                      <h2>Activity</h2>
-                      <p>Signals from your workspace</p>
+                      <h2>{t("overview.activity")}</h2>
+                      <p>{t("overview.activitySubtitle")}</p>
                     </div>
-                    <button className="more-button" aria-label="More activity">
+                    <button className="more-button" aria-label={t("overview.moreActivity")}>
                       •••
                     </button>
                   </div>
                   <Activity
                     icon="spark"
-                    title="Test generated"
-                    body="Account / sign in"
-                    time="8m ago"
+                    title={t("overview.testGenerated")}
+                    body={t("overview.accountSignIn")}
+                    time={t("time.minutesAgo", { n: 8 })}
                   />
                   <Activity
                     icon="branch"
-                    title="PR #184 opened"
-                    body="Improve checkout coverage"
-                    time="23m ago"
+                    title={t("overview.prOpened")}
+                    body={t("overview.improveCheckout")}
+                    time={t("time.minutesAgo", { n: 23 })}
                   />
                   <Activity
                     icon="shield"
-                    title="Runner updated"
+                    title={t("overview.runnerUpdated")}
                     body="linux-chromium-02"
                     time="1h ago"
                   />
@@ -678,14 +702,14 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                 <div className="panel editor-panel">
                   <div className="panel-header">
                     <div>
-                      <h2>Test editor</h2>
-                      <p>Source-first YAML manifest</p>
+                      <h2>{t("overview.testEditor")}</h2>
+                      <p>{t("overview.sourceFirstYaml")}</p>
                     </div>
                     <button
                       className="text-button"
                       onClick={() => setEditorOpen(!editorOpen)}
                     >
-                      {editorOpen ? "Close editor" : "Open editor"}{" "}
+                      {editorOpen ? t("overview.closeEditor") : t("overview.openEditor")}{" "}
                       <span>→</span>
                     </button>
                   </div>
@@ -693,7 +717,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                     <div className="editor-tabs">
                       <span className="active-tab">login.yaml</span>
                       <span>generated.spec.ts</span>
-                      <span className="saved">● Saved</span>
+                      <span className="saved">● {t("overview.saved")}</span>
                     </div>
                     <div className="code-area">
                       {manifest
@@ -714,14 +738,14 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                 <div className="panel evidence-panel">
                   <div className="panel-header">
                     <div>
-                      <h2>Failure evidence</h2>
+                      <h2>{t("overview.failureEvidence")}</h2>
                       <p>
                         {selectedRun?.id ?? "run-9f2c"} ·{" "}
-                        {selectedRun?.test ?? "Account / sign in"}
+                        {selectedRun?.test ?? t("overview.accountSignIn")}
                       </p>
                     </div>
                     <span className="evidence-label">
-                      <Icon name="image" /> 6 artifacts
+                      <Icon name="image" /> {t("overview.artifactsCount", { n: 6 })}
                     </span>
                   </div>
                   <div className="evidence-image">
@@ -747,7 +771,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                       </div>
                     </div>
                     <div className="evidence-overlay">
-                      Assertion failed · verify-home
+                      {t("overview.assertionFailed")}
                     </div>
                   </div>
                   <div className="evidence-footer">
@@ -757,7 +781,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                     <span>
                       <Icon name="code" /> line 12
                     </span>
-                    <button className="text-button">Open report →</button>
+                    <button className="text-button">{t("overview.openReport")} →</button>
                   </div>
                 </div>
               </section>
@@ -804,6 +828,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
                   createdAt: new Date().toISOString(),
                 },
                 tests,
+                t,
               );
               setRuns((current) => [run, ...current]);
               setSelectedRun(run);
@@ -851,27 +876,27 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             <div className="empty-icon">
               <Icon name={active === "Runners" ? "server" : "layers"} />
             </div>
-            <h2>{active}</h2>
+            <h2>{t(NAV_I18N_KEYS[active] ?? active)}</h2>
             <p>
               {active === "Runners"
-                ? "Runner registration and capability leasing are available through the tenant-safe API and runner CLI."
-                : `Connect a team server to load ${active.toLowerCase()} from the API.`}
+                ? t("empty.runnersDescription")
+                : `${t("empty.connectPrefix")} ${t(NAV_I18N_KEYS[active] ?? active).toLowerCase()}`}
             </p>
             <button
               className="run-button"
               onClick={() => setActive("Overview")}
             >
-              Back to overview
+              {t("empty.back")}
             </button>
           </section>
         )}
         <footer>
-          <span>OpenTestPilot v0.1.0</span>
+          <span>{t("footer.version")}</span>
           <span>
-            <span className="online-dot" /> All systems operational
+            <span className="online-dot" /> {t("footer.operational")}
           </span>
           <span>
-            Docs <span>↗</span>
+            {t("footer.docs")} <span>↗</span>
           </span>
         </footer>
       </main>
@@ -890,6 +915,7 @@ function LiveOverview({
   onSelect: (run: Run) => void;
   onOpenRuns: () => void;
 }) {
+  const { t } = useLocale();
   const completed = runs.filter((run) => run.status !== "running");
   const passed = completed.filter((run) => run.status === "passed").length;
   const passRate =
@@ -910,30 +936,30 @@ function LiveOverview({
     <>
       <section className="metric-grid">
         <Metric
-          label="Pass rate"
+          label={t("overview.passRate")}
           value={passRate}
-          change={`${completed.length} completed`}
+          change={t("liveOverview.completed", { n: completed.length })}
           tone="green"
           icon="check"
         />
         <Metric
-          label="Runs loaded"
+          label={t("liveOverview.runsLoaded")}
           value={String(runs.length)}
-          change="live server"
+          change={t("liveOverview.liveServer")}
           tone="blue"
           icon="activity"
         />
         <Metric
-          label="Median duration"
+          label={t("overview.medianDuration")}
           value={median}
-          change="selected organization"
+          change={t("liveOverview.selectedOrg")}
           tone="purple"
           icon="clock"
         />
         <Metric
-          label="Failed runs"
+          label={t("liveOverview.failedRuns")}
           value={String(completed.length - passed)}
-          change="live evidence available"
+          change={t("liveOverview.liveEvidenceAvailable")}
           tone="orange"
           icon="spark"
         />
@@ -942,20 +968,20 @@ function LiveOverview({
         <div className="panel runs-panel">
           <div className="panel-header">
             <div>
-              <h2>Recent live runs</h2>
-              <p>Execution records from the selected organization</p>
+              <h2>{t("liveOverview.recentLiveRuns")}</h2>
+              <p>{t("liveOverview.recentLiveRunsSubtitle")}</p>
             </div>
             <button className="text-button" onClick={onOpenRuns}>
-              View evidence <span>→</span>
+              {t("liveOverview.viewEvidence")} <span>→</span>
             </button>
           </div>
           <div className="run-table">
             <div className="table-head">
-              <span>TEST</span>
-              <span>BRANCH</span>
-              <span>DURATION</span>
-              <span>STATUS</span>
-              <span>WHEN</span>
+              <span>{t("table.test")}</span>
+              <span>{t("table.branch")}</span>
+              <span>{t("table.duration")}</span>
+              <span>{t("table.status")}</span>
+              <span>{t("table.when")}</span>
             </div>
             {runs.slice(0, 6).map((run) => (
               <button
@@ -991,8 +1017,8 @@ function LiveOverview({
         <div className="panel activity-panel">
           <div className="panel-header">
             <div>
-              <h2>Live activity</h2>
-              <p>Latest server run signals</p>
+              <h2>{t("liveOverview.liveActivity")}</h2>
+              <p>{t("liveOverview.liveActivitySubtitle")}</p>
             </div>
           </div>
           {runs.slice(0, 4).map((run) => (
@@ -1005,7 +1031,7 @@ function LiveOverview({
                     ? "close"
                     : "play"
               }
-              title={`Run ${run.status}`}
+              title={t("liveOverview.runStatus", { status: run.status })}
               body={`${run.test} · ${run.id}`}
               time={run.time}
             />
@@ -1016,59 +1042,58 @@ function LiveOverview({
         <div className="panel editor-panel">
           <div className="panel-header">
             <div>
-              <h2>Selected run</h2>
-              <p>{selectedRun?.id ?? "No run selected"}</p>
+              <h2>{t("liveOverview.selectedRun")}</h2>
+              <p>{selectedRun?.id ?? t("liveOverview.noRunSelected")}</p>
             </div>
             <button className="text-button" onClick={onOpenRuns}>
-              Open Runs <span>→</span>
+              {t("liveOverview.openRuns")} <span>→</span>
             </button>
           </div>
           <div className="live-list-body">
             <div className="live-list-row">
               <div>
-                <b>Status</b>
+                <b>{t("liveOverview.status")}</b>
                 <span>{selectedRun?.status ?? "—"}</span>
               </div>
             </div>
             <div className="live-list-row">
               <div>
-                <b>Test</b>
+                <b>{t("liveOverview.test")}</b>
                 <span>{selectedRun?.test ?? "—"}</span>
               </div>
             </div>
             <p className="manifest-code">
-              Open Runs to inspect structured failures, report status, and
-              uploaded artifact bodies from the team server.
+              {t("liveOverview.inspectHint")}
             </p>
           </div>
         </div>
         <div className="panel evidence-panel">
           <div className="panel-header">
             <div>
-              <h2>Live evidence</h2>
-              <p>{selectedRun?.id ?? "Select a run"}</p>
+              <h2>{t("liveOverview.liveEvidence")}</h2>
+              <p>{selectedRun?.id ?? t("liveOverview.selectARun")}</p>
             </div>
             <span className="evidence-label">
-              <Icon name="image" /> server-backed
+              <Icon name="image" /> {t("liveOverview.serverBacked")}
             </span>
           </div>
           <div className="live-list-body">
             <div className="live-list-row">
               <div>
-                <b>Evidence source</b>
-                <span>Team API · tenant-scoped run result</span>
+                <b>{t("liveOverview.evidenceSource")}</b>
+                <span>{t("liveOverview.evidenceSourceValue")}</span>
               </div>
             </div>
             <div className="live-list-row">
               <div>
-                <b>Next step</b>
+                <b>{t("liveOverview.nextStep")}</b>
                 <span>
-                  Open Runs to load artifact links and failure details
+                  {t("liveOverview.nextStepValue")}
                 </span>
               </div>
             </div>
             <button className="run-button" onClick={onOpenRuns}>
-              Inspect evidence →
+              {t("liveOverview.inspectEvidence")} →
             </button>
           </div>
         </div>
@@ -1167,6 +1192,7 @@ function TestsView({
   onManifestChange: (value: string) => void;
   onSave: () => void;
 }) {
+  const { t, locale } = useLocale();
   const [view, setView] = useState<
     | "natural"
     | "tree"
@@ -1192,9 +1218,9 @@ function TestsView({
     try {
       return generatePlaywright(parsed as unknown as Manifest).code;
     } catch (error) {
-      return `Generation unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      return t("tests.generationUnavailable", { message: error instanceof Error ? error.message : String(error) });
     }
-  }, [parsed]);
+  }, [parsed, t]);
   const updateField = (field: string, value: unknown) => {
     if (parsed === undefined) return;
     onManifestChange(stringifyYaml({ ...parsed, [field]: value }));
@@ -1207,11 +1233,11 @@ function TestsView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Tests</h2>
+            <h2>{t("tests.title")}</h2>
             <p>
               {live
-                ? "Tests loaded from the selected organization"
-                : "Connect a team server to load tests"}
+                ? t("tests.subtitleLive")
+                : t("tests.subtitleDemo")}
             </p>
           </div>
         </div>
@@ -1220,7 +1246,7 @@ function TestsView({
             <div className="empty-icon">
               <Icon name="layers" />
             </div>
-            <p>No tests are registered for this organization yet.</p>
+            <p>{t("tests.noTests")}</p>
           </div>
         ) : (
           <div className="live-list-body">
@@ -1234,10 +1260,10 @@ function TestsView({
                 </div>
                 <div className="row-actions">
                   <button className="text-button" onClick={() => onEdit(test)}>
-                    Edit
+                    {t("tests.edit")}
                   </button>
                   <button className="text-button" onClick={() => onRun(test)}>
-                    Run →
+                    {t("tests.run")} →
                   </button>
                 </div>
               </div>
@@ -1251,9 +1277,9 @@ function TestsView({
             <div>
               <h2>{editingTest.name}</h2>
               <p>
-                Source-first Manifest editor ·{" "}
+                {t("tests.sourceFirstEditor")} ·{" "}
                 {manifestStatus ??
-                  (manifestLoading ? "loading…" : "unsaved changes are local")}
+                  (manifestLoading ? t("tests.statusLoading") : t("tests.statusUnsaved"))}
               </p>
             </div>
             <button
@@ -1261,7 +1287,7 @@ function TestsView({
               onClick={onSave}
               disabled={!live || manifestLoading}
             >
-              Save
+              {t("tests.save")}
             </button>
           </div>
           <div className="editor-view-tabs">
@@ -1284,57 +1310,39 @@ function TestsView({
                 className={view === item ? "selected" : ""}
                 onClick={() => setView(item)}
               >
-                {item === "natural"
-                  ? "Natural language"
-                  : item === "tree"
-                    ? "Tree"
-                    : item === "form"
-                      ? "Form"
-                      : item === "yaml"
-                        ? "YAML"
-                        : item === "generated"
-                          ? "Generated TS"
-                          : item === "custom"
-                            ? "Custom code"
-                            : item === "graph"
-                              ? "Graph"
-                    : item === "diff"
-                      ? "Git diff"
-                      : item === "versions"
-                        ? "Versions"
-                        : "Results"}
+                {t(`tests.tab.${item}`)}
               </button>
             ))}
           </div>
           {view === "natural" ? (
             <label className="editor-form-field">
-              Describe this test
+              {t("tests.describeThisTest")}
               <textarea
                 value={String(parsed?.["description"] ?? "")}
                 onChange={(event) =>
                   updateField("description", event.target.value)
                 }
-                placeholder="Describe the user journey and expected outcome"
+                placeholder={t("tests.describePlaceholder")}
               />
             </label>
           ) : view === "form" ? (
             <div className="editor-form">
               <label>
-                Name
+                {t("tests.name")}
                 <input
                   value={String(parsed?.["name"] ?? "")}
                   onChange={(event) => updateField("name", event.target.value)}
                 />
               </label>
               <label>
-                Type
+                {t("tests.type")}
                 <input
                   value={String(parsed?.["type"] ?? "")}
                   onChange={(event) => updateField("type", event.target.value)}
                 />
               </label>
               <label>
-                Priority
+                {t("tests.priority")}
                 <input
                   value={String(parsed?.["priority"] ?? "")}
                   onChange={(event) =>
@@ -1344,15 +1352,15 @@ function TestsView({
               </label>
             </div>
           ) : view === "tree" ? (
-            <div className="manifest-tree" aria-label="Manifest tree">
+            <div className="manifest-tree" aria-label={t("tests.manifestTree")}>
               {parsed === undefined ? (
-                <span className="editor-error">YAML is invalid</span>
+                <span className="editor-error">{t("tests.yamlInvalid")}</span>
               ) : (
                 <Tree value={parsed} />
               )}
             </div>
           ) : view === "yaml" ? (
-            <div className="monaco-editor-shell" aria-label="Manifest YAML">
+            <div className="monaco-editor-shell" aria-label={t("tests.manifestYaml")}>
               <Editor
                 height="520px"
                 defaultLanguage="yaml"
@@ -1371,20 +1379,20 @@ function TestsView({
           ) : view === "graph" ? (
             <ManifestGraph manifest={parsed} />
           ) : view === "custom" ? (
-            <pre className="manifest-code" aria-label="Custom code references">
+            <pre className="manifest-code" aria-label={t("tests.customCode")}>
               {JSON.stringify(customCode, null, 2)}
             </pre>
           ) : view === "versions" ? (
-            <div className="live-list-body" aria-label="Manifest versions">
+            <div className="live-list-body" aria-label={t("tests.manifestVersions")}>
               {manifestVersions.length === 0 ? (
-                <p>No persisted Manifest versions yet.</p>
+                <p>{t("tests.noVersions")}</p>
               ) : (
                 manifestVersions.map((version) => (
                   <div className="live-list-row" key={version.id}>
                     <div>
-                      <b>Version {version.version}</b>
+                      <b>{t("tests.version", { n: version.version })}</b>
                       <span>
-                        {version.commitSha} · {new Date(version.createdAt).toLocaleString()}
+                        {version.commitSha} · {new Date(version.createdAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US")}
                       </span>
                     </div>
                     <code>{String(version.manifest["name"] ?? version.testId)}</code>
@@ -1395,19 +1403,17 @@ function TestsView({
           ) : view === "results" ? (
             <div className="manifest-tree">
               <p>
-                Run results are available in the Runs view after executing this
-                test.
+                {t("tests.resultsHint1")}
               </p>
               <p>
-                Generated code is validated from the current Manifest before
-                save.
+                {t("tests.resultsHint2")}
               </p>
             </div>
           ) : (
             <pre
               className="manifest-code"
-              aria-label={
-                view === "generated" ? "Generated TypeScript" : "Manifest diff"
+                aria-label={
+                view === "generated" ? t("tests.generatedCode") : t("tests.manifestDiff")
               }
             >
               {view === "generated"
@@ -1478,6 +1484,7 @@ function ManifestGraph({
 }: {
   manifest: Record<string, unknown> | undefined;
 }): ReactNode {
+  const { t } = useLocale();
   const steps = Array.isArray(manifest?.["steps"])
     ? (manifest["steps"] as Array<Record<string, unknown>>)
     : [];
@@ -1485,17 +1492,17 @@ function ManifestGraph({
     return (
       <div className="manifest-tree">
         <span className="editor-error">
-          Add steps to see the execution graph.
+          {t("tests.needStepsForGraph")}
         </span>
       </div>
     );
   return (
-    <div className="manifest-graph" aria-label="Manifest graph">
+    <div className="manifest-graph" aria-label={t("tests.manifestGraph")}>
       {steps.map((step, index) => (
         <div className="graph-row" key={String(step["id"] ?? index)}>
           <div className="graph-node graph-step">
             <b>{String(step["id"] ?? `step-${index + 1}`)}</b>
-            <small>step</small>
+            <small>{t("tests.step")}</small>
           </div>
           <span className="graph-arrow">→</span>
           <div className="graph-actions">
@@ -1507,12 +1514,12 @@ function ManifestGraph({
                     key={String(action["id"] ?? actionIndex)}
                   >
                     <b>{String(action["id"] ?? `action-${actionIndex + 1}`)}</b>
-                    <small>{String(action["type"] ?? "action")}</small>
+                    <small>{String(action["type"] ?? t("tests.action"))}</small>
                   </div>
                 ),
               )
             ) : (
-              <span className="editor-error">No actions</span>
+              <span className="editor-error">{t("tests.noActions")}</span>
             )}
           </div>
         </div>
@@ -1533,6 +1540,7 @@ function RunsView({
   api: TestPilotApi | undefined;
   onCancel: (runId: string) => void;
 }) {
+  const { t } = useLocale();
   const [evidence, setEvidence] = useState<{
     failures: Array<Record<string, unknown>>;
     artifacts: Array<{ id: string; key: string; size: number }>;
@@ -1602,17 +1610,17 @@ function RunsView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Runs</h2>
-            <p>Execution records from the selected organization</p>
+            <h2>{t("runs.title")}</h2>
+            <p>{t("runs.subtitle")}</p>
           </div>
         </div>
         <div className="run-table">
           <div className="table-head">
-            <span>TEST</span>
-            <span>BRANCH</span>
-            <span>DURATION</span>
-            <span>STATUS</span>
-            <span>WHEN</span>
+            <span>{t("table.test")}</span>
+            <span>{t("table.branch")}</span>
+            <span>{t("table.duration")}</span>
+            <span>{t("table.status")}</span>
+            <span>{t("table.when")}</span>
           </div>
           {runs.map((run) => (
             <button
@@ -1655,30 +1663,29 @@ function RunsView({
               className="text-button"
               onClick={() => onCancel(selectedRun.id)}
             >
-              Cancel selected run
+              {t("runs.cancelSelected")}
             </button>
           )}
       </section>
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Evidence</h2>
-            <p>{selectedRun?.id ?? "Select a run"}</p>
+            <h2>{t("runs.evidence")}</h2>
+            <p>{selectedRun?.id ?? t("runs.selectRun")}</p>
           </div>
         </div>
         {evidence === undefined ? (
           <div className="empty-state compact">
             <p>
-              Connect to the team server to load failures, artifacts, and report
-              status.
+              {t("runs.connectHint")}
             </p>
           </div>
         ) : (
           <div className="live-list-body">
             <div className="live-list-row">
               <div>
-                <b>Report status</b>
-                <span>{evidence.report?.status ?? "unknown"}</span>
+                <b>{t("runs.reportStatus")}</b>
+                <span>{evidence.report?.status ?? t("runs.unknown")}</span>
               </div>
               {evidence.report?.reportUrl !== undefined && (
                 <a
@@ -1687,22 +1694,22 @@ function RunsView({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open report ↗
+                  {t("runs.openReport")} ↗
                 </a>
               )}
             </div>
             <div className="live-list-row">
               <div>
-                <b>Failures</b>
+                <b>{t("runs.failures")}</b>
                 <span>
-                  {evidence.failures.length} structured failure records
+                  {t("runs.failuresCount", { n: evidence.failures.length })}
                 </span>
               </div>
             </div>
             <div className="live-list-row">
               <div>
-                <b>Artifacts</b>
-                <span>{evidence.artifacts.length} uploaded artifacts</span>
+                <b>{t("runs.artifactsLabel")}</b>
+                <span>{t("runs.artifactsCount", { n: evidence.artifacts.length })}</span>
               </div>
             </div>
             {evidence.artifacts.map((artifact) => (
@@ -1719,7 +1726,7 @@ function RunsView({
                     href={artifactUrls[artifact.id]}
                     download={artifact.key}
                   >
-                    Open ↗
+                    {t("runs.open")} ↗
                   </a>
                 )}
               </div>
@@ -1730,14 +1737,14 @@ function RunsView({
               </pre>
             ))}
             {runResult !== undefined && (
-              <div className="manifest-tree" aria-label="Run step and action results">
-                <b>Steps and actions</b>
+            <div className="manifest-tree" aria-label={t("runs.resultsAria")}>
+                <b>{t("runs.stepsAndActions")}</b>
                 {runResult.steps.map((step) => (
                   <div className="live-list-row" key={step.stepId}>
                     <div>
                       <b>{step.stepId}</b>
                       <span>
-                        {step.status} · {step.actions.length} actions
+                        {step.status} · {t("runs.actionsCount", { n: step.actions.length })}
                       </span>
                       {step.actions.map((action) => (
                         <span key={action.actionId}>
@@ -1762,15 +1769,16 @@ function RunnersView({
   runners: ApiRunner[];
   live: boolean;
 }) {
+  const { t } = useLocale();
   return (
     <section className="panel live-list">
       <div className="panel-header">
         <div>
-          <h2>Runner fleet</h2>
+          <h2>{t("runners.title")}</h2>
           <p>
             {live
-              ? "Registered runners and capabilities from the selected organization"
-              : "Connect to the team server to load runners"}
+              ? t("runners.subtitleLive")
+              : t("runners.subtitleDemo")}
           </p>
         </div>
       </div>
@@ -1779,7 +1787,7 @@ function RunnersView({
           <div className="empty-icon">
             <Icon name="server" />
           </div>
-          <p>No runners are registered for this organization yet.</p>
+          <p>{t("runners.noRunners")}</p>
         </div>
       ) : (
         <div className="live-list-body">
@@ -1789,12 +1797,12 @@ function RunnersView({
                 <b>{runner.name}</b>
                 <span>
                   {runner.runnerId} · {runner.capabilities.browsers.join(", ")}{" "}
-                  · max {runner.capabilities.maxConcurrency}
+                  · {t("runners.max", { n: runner.capabilities.maxConcurrency })}
                 </span>
               </div>
               <span className="pill pill-passed">
                 <span className="dot" />
-                heartbeat {relativeTime(runner.heartbeatAt)}
+                {t("runners.heartbeat", { time: relativeTime(runner.heartbeatAt, t) })}
               </span>
             </div>
           ))}
@@ -1816,6 +1824,7 @@ function SchedulesView({
   api: TestPilotApi | undefined;
   onRunStarted: (runId: string, schedule: ApiSchedule) => void;
 }) {
+  const { t } = useLocale();
   const testName = new Map(tests.map((test) => [test.id, test.name]));
   const [triggering, setTriggering] = useState<string | undefined>();
   const [message, setMessage] = useState<string | undefined>();
@@ -1826,21 +1835,21 @@ function SchedulesView({
     void api
       .triggerSchedule(schedule.id)
       .then((result) => {
-        setMessage(`Queued ${result.runId}`);
+        setMessage(t("schedules.queued", { id: result.runId }));
         onRunStarted(result.runId, schedule);
       })
-      .catch(() => setMessage("Schedule trigger failed"))
+      .catch(() => setMessage(t("schedules.triggerFailed")))
       .finally(() => setTriggering(undefined));
   };
   return (
     <section className="panel live-list">
       <div className="panel-header">
         <div>
-          <h2>Schedules</h2>
+          <h2>{t("schedules.title")}</h2>
           <p>
             {live
-              ? "Schedules loaded from the selected organization"
-              : "Connect a team server to load schedules"}
+              ? t("schedules.subtitleLive")
+              : t("schedules.subtitleDemo")}
           </p>
         </div>
         {message !== undefined && (
@@ -1852,7 +1861,7 @@ function SchedulesView({
           <div className="empty-icon">
             <Icon name="clock" />
           </div>
-          <p>No schedules are configured for this organization yet.</p>
+          <p>{t("schedules.noSchedules")}</p>
         </div>
       ) : (
         <div className="live-list-body">
@@ -1861,12 +1870,12 @@ function SchedulesView({
               <div>
                 <b>{testName.get(schedule.testId) ?? schedule.testId}</b>
                 <span>
-                  {schedule.cron} · {schedule.enabled ? "enabled" : "disabled"}
+                  {schedule.cron} · {schedule.enabled ? t("schedules.enabled") : t("schedules.disabled")}
                 </span>
               </div>
               <div className="row-actions">
                 <span className="pill pill-running">
-                  {schedule.enabled ? "active" : "paused"}
+                  {schedule.enabled ? t("schedules.active") : t("schedules.paused")}
                 </span>
                 {schedule.enabled && (
                   <button
@@ -1874,7 +1883,7 @@ function SchedulesView({
                     onClick={() => trigger(schedule)}
                     disabled={triggering === schedule.id}
                   >
-                    {triggering === schedule.id ? "Queueing…" : "Run now →"}
+                    {triggering === schedule.id ? t("schedules.queueing") : `${t("schedules.runNow")} →`}
                   </button>
                 )}
               </div>
@@ -1900,6 +1909,7 @@ function GitHubView({
   onRepositoryUpdated: (repository: ApiRepository) => void;
   onChangeRequestCreated: (changeRequest: ApiChangeRequest) => void;
 }) {
+  const { t } = useLocale();
   const [selectedRepositoryId, setSelectedRepositoryId] = useState<
     string | undefined
   >(repositories[0]?.id);
@@ -1941,10 +1951,10 @@ function GitHubView({
       })
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Branch listing failed",
+          error instanceof Error ? error.message : t("github.branchListFailed"),
         ),
       );
-  }, [api, selected]);
+  }, [api, selected, t]);
   useEffect(() => {
     if (api === undefined || selected === undefined) return;
     void api
@@ -1952,10 +1962,10 @@ function GitHubView({
       .then(setPullRequests)
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Pull request history failed",
+          error instanceof Error ? error.message : t("github.pullRequestHistoryFailed"),
         ),
       );
-  }, [api, selected]);
+  }, [api, selected, t]);
   const sync = () => {
     if (api === undefined || selected === undefined) return;
     setSyncing(true);
@@ -1964,11 +1974,11 @@ function GitHubView({
       .syncRepository(selected.id)
       .then((updated) => {
         onRepositoryUpdated(updated);
-        setMessage(`Synced ${updated.fullName} (${updated.defaultBranch})`);
+        setMessage(t("github.syncedMsg", { name: updated.fullName, branch: updated.defaultBranch }));
       })
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Repository sync failed",
+          error instanceof Error ? error.message : t("github.repositorySyncFailed"),
         ),
       )
       .finally(() => setSyncing(false));
@@ -1980,14 +1990,14 @@ function GitHubView({
       .createGitHubPullRequest(selected.id, { title, head, body, draft: true })
       .then((result) =>
         setMessage(
-          `Draft PR #${result.pullRequest.number} created: ${result.pullRequest.htmlUrl}`,
+          t("github.prCreated", { number: result.pullRequest.number, url: result.pullRequest.htmlUrl }),
         ),
       )
       .catch((error) =>
         setMessage(
           error instanceof Error
             ? error.message
-            : "GitHub App PR creation failed",
+            : t("github.prCreateFailed"),
         ),
       );
   };
@@ -2004,7 +2014,7 @@ function GitHubView({
       .then((result) => setComparison(result.comparison))
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Branch comparison failed",
+          error instanceof Error ? error.message : t("github.comparisonFailed"),
         ),
       );
   };
@@ -2014,10 +2024,10 @@ function GitHubView({
       .getRepositoryFile(selected.id, manifestPath.trim(), manifestRef.trim() || undefined)
       .then((file) => {
         setManifestFile(file);
-        setMessage(`Loaded ${file.path} @ ${manifestRef.trim() || selected.defaultBranch}`);
+        setMessage(t("github.loadedMsg", { path: file.path, ref: manifestRef.trim() || selected.defaultBranch }));
       })
       .catch((error) =>
-        setMessage(error instanceof Error ? error.message : "Repository file load failed"),
+        setMessage(error instanceof Error ? error.message : t("github.fileLoadFailed")),
       );
   };
   const createBranch = () => {
@@ -2036,7 +2046,7 @@ function GitHubView({
     void api
       .createBranch(selected.id, { branch: newBranch.trim(), baseSha })
       .then((result) => {
-        setMessage(`Branch ${result.branch} created from ${result.baseSha}`);
+        setMessage(t("github.branchCreated", { branch: result.branch, sha: result.baseSha }));
         setBranches((current) => [
           ...current,
           { name: result.branch, sha: result.baseSha },
@@ -2045,7 +2055,7 @@ function GitHubView({
       })
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Branch creation failed",
+          error instanceof Error ? error.message : t("github.branchCreateFailed"),
         ),
       );
   };
@@ -2066,11 +2076,11 @@ function GitHubView({
         message: commitMessage.trim(),
       })
       .then((result) =>
-        setMessage(`Committed ${result.path} (${result.commitSha})`),
+        setMessage(t("github.committedMsg", { path: result.path, sha: result.commitSha })),
       )
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "File commit failed",
+          error instanceof Error ? error.message : t("github.fileCommitFailed"),
         ),
       );
   };
@@ -2079,12 +2089,12 @@ function GitHubView({
     void api
       .createChangeRequest(changeTitle.trim(), body)
       .then(onChangeRequestCreated)
-      .then(() => setMessage("Change request saved to the organization"))
+      .then(() => setMessage(t("github.changeSaved")))
       .catch((error) =>
         setMessage(
           error instanceof Error
             ? error.message
-            : "Change request creation failed",
+            : t("github.changeCreateFailed"),
         ),
       );
   };
@@ -2093,11 +2103,11 @@ function GitHubView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>GitHub integration</h2>
+            <h2>{t("github.title")}</h2>
             <p>
               {live
-                ? "Repository and change-request controls for the selected organization"
-                : "Connect a team server to use GitHub integration"}
+                ? t("github.subtitleLive")
+                : t("github.subtitleDemo")}
             </p>
           </div>
           {message !== undefined && (
@@ -2106,7 +2116,7 @@ function GitHubView({
         </div>
         {repositories.length === 0 ? (
           <div className="empty-state compact">
-            <p>No repositories are linked yet.</p>
+            <p>{t("github.noRepos")}</p>
           </div>
         ) : (
           <div className="live-list-body">
@@ -2116,7 +2126,7 @@ function GitHubView({
                   <b>{repository.fullName}</b>
                   <span>
                     {repository.provider} · {repository.defaultBranch} ·
-                    installation {repository.installationId ?? "not configured"}
+                    {t("github.installation", { id: repository.installationId ?? t("github.notConfigured") })}
                   </span>
                 </div>
                 <div className="row-actions">
@@ -2124,7 +2134,7 @@ function GitHubView({
                     className="text-button"
                     onClick={() => setSelectedRepositoryId(repository.id)}
                   >
-                    Select
+                    {t("github.select")}
                   </button>
                   {selected?.id === repository.id && (
                     <button
@@ -2132,7 +2142,7 @@ function GitHubView({
                       onClick={sync}
                       disabled={syncing}
                     >
-                      {syncing ? "Syncing…" : "Sync →"}
+                      {syncing ? t("github.syncing") : `${t("github.sync")} →`}
                     </button>
                   )}
                 </div>
@@ -2142,20 +2152,20 @@ function GitHubView({
         )}
         <div className="panel-header">
           <div>
-            <h2>Branch comparison</h2>
-            <p>{branches.length} branches loaded from GitHub</p>
+            <h2>{t("github.branchComparison")}</h2>
+            <p>{t("github.branchesLoaded", { n: branches.length })}</p>
           </div>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            Base branch
+            {t("github.baseBranch")}
             <input
               value={baseBranch}
               onChange={(event) => setBaseBranch(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Head branch
+            {t("github.headBranch")}
             <input
               value={compareHead}
               onChange={(event) => setCompareHead(event.target.value)}
@@ -2166,7 +2176,7 @@ function GitHubView({
             onClick={compare}
             disabled={!live || selected === undefined}
           >
-            Compare branches →
+            {t("github.compareBranches")} →
           </button>
           {comparison !== undefined && (
             <div className="live-list-row">
@@ -2176,9 +2186,9 @@ function GitHubView({
                   {comparison.behindBy}
                 </b>
                 <span>
-                  {comparison.files.length} changed files ·{" "}
+                  {t("github.filesChanged", { n: comparison.files.length })} ·{" "}
                   {comparison.files.map((file) => file.filename).join(", ") ||
-                    "no file changes"}
+                    t("github.noFileChanges")}
                 </span>
               </div>
             </div>
@@ -2186,21 +2196,21 @@ function GitHubView({
         </div>
         <div className="panel-header">
           <div>
-            <h2>Manifest source and pull request history</h2>
-            <p>{pullRequests.length} open/closed pull requests loaded from GitHub</p>
+            <h2>{t("github.manifestSourceHistory")}</h2>
+            <p>{t("github.pullRequestsLoaded", { n: pullRequests.length })}</p>
           </div>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            Manifest path
+            {t("github.manifestPath")}
             <input value={manifestPath} onChange={(event) => setManifestPath(event.target.value)} />
           </label>
           <label className="editor-form-field">
-            Git ref
+            {t("github.gitRef")}
             <input value={manifestRef} onChange={(event) => setManifestRef(event.target.value)} />
           </label>
           <button className="text-button" onClick={loadManifestFile} disabled={!live || selected === undefined}>
-            Load repository Manifest →
+            {t("github.loadManifest")} →
           </button>
           {manifestFile !== undefined && (
             <div className="live-list-row">
@@ -2221,20 +2231,20 @@ function GitHubView({
         </div>
         <div className="panel-header">
           <div>
-            <h2>Branch and manifest write</h2>
-            <p>Create a repair branch and commit a Manifest through the GitHub App</p>
+            <h2>{t("github.branchWrite")}</h2>
+            <p>{t("github.branchWriteSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            New branch
+            {t("github.newBranch")}
             <input
               value={newBranch}
               onChange={(event) => setNewBranch(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Base SHA (optional when loaded)
+            {t("github.baseSha")}
             <input
               value={branchBaseSha}
               onChange={(event) => setBranchBaseSha(event.target.value)}
@@ -2245,24 +2255,24 @@ function GitHubView({
             onClick={createBranch}
             disabled={!live || selected === undefined}
           >
-            Create branch →
+            {t("github.createBranch")} →
           </button>
           <label className="editor-form-field">
-            Manifest path
+            {t("github.manifestPath")}
             <input
               value={commitPath}
               onChange={(event) => setCommitPath(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Commit message
+            {t("github.commitMessage")}
             <input
               value={commitMessage}
               onChange={(event) => setCommitMessage(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Manifest content
+            {t("github.manifestContent")}
             <textarea
               value={commitContent}
               onChange={(event) => setCommitContent(event.target.value)}
@@ -2273,18 +2283,18 @@ function GitHubView({
             onClick={commitFile}
             disabled={!live || selected === undefined}
           >
-            Commit file →
+            {t("github.commitFile")} →
           </button>
         </div>
         <div className="panel-header">
           <div>
-            <h2>Change requests</h2>
-            <p>Tenant-scoped review intent</p>
+            <h2>{t("github.changeRequests")}</h2>
+            <p>{t("github.changeRequestsSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            Title
+            {t("github.titleLabel")}
             <input
               value={changeTitle}
               onChange={(event) => setChangeTitle(event.target.value)}
@@ -2295,7 +2305,7 @@ function GitHubView({
             onClick={createChange}
             disabled={!live}
           >
-            Create change request
+            {t("github.createChangeRequest")}
           </button>
           {changeRequests.map((changeRequest) => (
             <div className="live-list-row" key={changeRequest.id}>
@@ -2312,9 +2322,9 @@ function GitHubView({
       <section className="panel manifest-editor">
         <div className="panel-header">
           <div>
-            <h2>Draft Pull Request</h2>
+            <h2>{t("github.draftPr")}</h2>
             <p>
-              {selected?.fullName ?? "Select a repository"} · GitHub App-backed
+              {selected?.fullName ?? t("github.selectRepoBacked")}
             </p>
           </div>
           <button
@@ -2322,35 +2332,33 @@ function GitHubView({
             onClick={createPr}
             disabled={!live || selected === undefined}
           >
-            Create draft PR
+            {t("github.createDraftPr")}
           </button>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            Title
+            {t("github.titleLabel")}
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Head branch
+            {t("github.headBranch")}
             <input
               value={head}
               onChange={(event) => setHead(event.target.value)}
             />
           </label>
           <label className="editor-form-field">
-            Body
+            {t("github.body")}
             <textarea
               value={body}
               onChange={(event) => setBody(event.target.value)}
             />
           </label>
           <p className="manifest-code">
-            The server exchanges the GitHub App installation token, creates the
-            branch/PR, and stores the resulting PR URL. Missing credentials are
-            surfaced as a 503 instead of being simulated.
+            {t("github.appExplainer")}
           </p>
         </div>
       </section>
@@ -2382,6 +2390,7 @@ function SettingsView({
   onPolicyUpdated: (policy: ApiStoragePolicy) => void;
   onSecretUpdated: (secret: ApiSecret) => void;
 }) {
+  const { t, locale } = useLocale();
   const [successDays, setSuccessDays] = useState(
     String(storagePolicy?.successRetentionDays ?? 30),
   );
@@ -2406,13 +2415,13 @@ function SettingsView({
       })
       .then((updated) => {
         onPolicyUpdated(updated);
-        setMessage("Storage policy saved");
+        setMessage(t("settings.policySaved"));
       })
       .catch((error) =>
         setMessage(
           error instanceof Error
             ? error.message
-            : "Storage policy update failed",
+            : t("settings.policySaveFailed"),
         ),
       );
   };
@@ -2434,12 +2443,12 @@ function SettingsView({
         setSecretName("");
         setSecretValue("");
         setMessage(
-          "Secret metadata saved; value is encrypted and never displayed",
+          t("settings.secretSaved"),
         );
       })
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Secret save failed",
+          error instanceof Error ? error.message : t("settings.secretSaveFailed"),
         ),
       );
   };
@@ -2450,11 +2459,11 @@ function SettingsView({
       .then((updated) => {
         onSecretUpdated(updated);
         setSecretValue("");
-        setMessage(`${secret.name} rotated`);
+        setMessage(t("settings.secretRotated", { name: secret.name }));
       })
       .catch((error) =>
         setMessage(
-          error instanceof Error ? error.message : "Secret rotation failed",
+          error instanceof Error ? error.message : t("settings.secretRotateFailed"),
         ),
       );
   };
@@ -2463,11 +2472,11 @@ function SettingsView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Organization settings</h2>
+            <h2>{t("settings.orgSettings")}</h2>
             <p>
               {live
-                ? "Tenant-scoped administration"
-                : "Connect to the team server for organization settings"}
+                ? t("settings.tenantScoped")
+                : t("settings.connectForSettings")}
             </p>
           </div>
           {message !== undefined && (
@@ -2477,27 +2486,24 @@ function SettingsView({
         <div className="live-list-body">
           <div className="live-list-row">
             <div>
-              <b>Projects</b>
-              <span>{projects.length} configured</span>
+              <b>{t("settings.projects")}</b>
+              <span>{t("settings.configured", { n: projects.length })}</span>
             </div>
           </div>
           <div className="live-list-row">
             <div>
-              <b>Members</b>
-              <span>{members.length} synchronized GitHub members</span>
+              <b>{t("settings.members")}</b>
+              <span>{t("settings.syncedMembers", { n: members.length })}</span>
             </div>
           </div>
           <div className="live-list-row">
             <div>
-              <b>AI Workers</b>
+              <b>{t("settings.aiWorkers")}</b>
               <span>
-                {aiWorkers.length} registered ·{" "}
-                {
-                  aiWorkers.filter(
-                    (worker) => worker.lastHeartbeatAt !== undefined,
-                  ).length
-                }{" "}
-                heartbeating
+                {t("settings.registeredHeartbeating", {
+                  n: aiWorkers.length,
+                  m: aiWorkers.filter((worker) => worker.lastHeartbeatAt !== undefined).length,
+                })}
               </span>
             </div>
           </div>
@@ -2506,20 +2512,20 @@ function SettingsView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>AI Worker jobs</h2>
-            <p>Failure analysis and repair jobs leased by registered workers</p>
+            <h2>{t("settings.aiWorkerJobs")}</h2>
+            <p>{t("settings.aiWorkerJobsSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
           {aiWorkerJobs.length === 0 ? (
-            <p>No AI Worker jobs yet.</p>
+            <p>{t("settings.noJobs")}</p>
           ) : (
             aiWorkerJobs.slice(0, 12).map((job) => (
               <div className="live-list-row" key={job.id}>
                 <div>
                   <b>{job.operation}</b>
                   <span>
-                    {job.id} · attempt {job.attempt}
+                    {job.id} · {t("settings.attempt", { n: job.attempt })}
                   </span>
                 </div>
                 <span
@@ -2535,13 +2541,13 @@ function SettingsView({
       <section className="panel manifest-editor">
         <div className="panel-header">
           <div>
-            <h2>Storage retention</h2>
-            <p>Organization-level artifact policy</p>
+            <h2>{t("settings.storageRetention")}</h2>
+            <p>{t("settings.storageRetentionSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
           <label className="editor-form-field">
-            Successful run retention (days)
+            {t("settings.successRetention")}
             <input
               type="number"
               min="0"
@@ -2550,7 +2556,7 @@ function SettingsView({
             />
           </label>
           <label className="editor-form-field">
-            Failed run retention (days)
+            {t("settings.failureRetention")}
             <input
               type="number"
               min="0"
@@ -2563,20 +2569,20 @@ function SettingsView({
             onClick={savePolicy}
             disabled={!live || storagePolicy === undefined}
           >
-            Save retention policy
+            {t("settings.saveRetention")}
           </button>
         </div>
       </section>
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Audit log</h2>
-            <p>Tenant-scoped administrative events</p>
+            <h2>{t("settings.auditLog")}</h2>
+            <p>{t("settings.auditLogSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
           {auditEvents.length === 0 ? (
-            <p>No audit events yet.</p>
+            <p>{t("settings.noAuditEvents")}</p>
           ) : (
             auditEvents.slice(0, 12).map((event) => (
               <div className="live-list-row" key={event.id}>
@@ -2584,7 +2590,7 @@ function SettingsView({
                   <b>{event.action}</b>
                   <span>
                     {event.resourceType} ·{" "}
-                    {new Date(event.createdAt).toLocaleString()}
+                    {new Date(event.createdAt).toLocaleString(locale === "ja" ? "ja-JP" : "en-US")}
                   </span>
                 </div>
               </div>
@@ -2595,44 +2601,44 @@ function SettingsView({
       <section className="panel live-list">
         <div className="panel-header">
           <div>
-            <h2>Secrets</h2>
-            <p>
-              References only; plaintext is write-only and encrypted at rest
-            </p>
+            <h2>{t("settings.secrets")}</h2>
+            <p>{t("settings.secretsSubtitle")}</p>
           </div>
         </div>
         <div className="live-list-body">
-          <label className="editor-form-field">
-            Name
-            <input
-              value={secretName}
-              onChange={(event) => setSecretName(event.target.value)}
-              placeholder="checkout-token"
-            />
-          </label>
-          <label className="editor-form-field">
-            Value
-            <input
-              type="password"
-              value={secretValue}
-              onChange={(event) => setSecretValue(event.target.value)}
-              autoComplete="new-password"
-            />
-          </label>
-          <button
-            className="run-button"
-            onClick={saveSecret}
-            disabled={!live || secretValue.length === 0}
-          >
-            Add secret
-          </button>
+          <form onSubmit={(event) => { event.preventDefault(); saveSecret(); }}>
+            <label className="editor-form-field">
+              {t("settings.secretNameLabel")}
+              <input
+                value={secretName}
+                onChange={(event) => setSecretName(event.target.value)}
+                placeholder={t("settings.secretNamePlaceholder")}
+              />
+            </label>
+            <label className="editor-form-field">
+              {t("settings.secretValueLabel")}
+              <input
+                type="password"
+                value={secretValue}
+                onChange={(event) => setSecretValue(event.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <button
+              type="submit"
+              className="run-button"
+              disabled={!live || secretValue.length === 0}
+            >
+              {t("settings.addSecret")}
+            </button>
+          </form>
           {secrets.map((secret) => (
             <div className="live-list-row" key={secret.id}>
               <div>
                 <b>{secret.name}</b>
                 <span>
-                  {secret.provider} · {secret.maskedValue} ·{" "}
-                  {secret.rotatedAt === undefined ? "never rotated" : "rotated"}
+                  {secret.provider === "builtin" ? t("settings.provider.builtin") : secret.provider} · {secret.maskedValue} ·{" "}
+                  {secret.rotatedAt === undefined ? t("settings.neverRotated") : t("settings.rotated")}
                 </span>
               </div>
               <button
@@ -2640,7 +2646,7 @@ function SettingsView({
                 onClick={() => rotateSecret(secret)}
                 disabled={!live || secretValue.length === 0}
               >
-                Rotate with value →
+                {t("settings.rotateWithValue")} →
               </button>
             </div>
           ))}
@@ -2650,7 +2656,7 @@ function SettingsView({
   );
 }
 
-function runForUi(run: ApiRun, tests: ApiTest[] = []): Run {
+function runForUi(run: ApiRun, tests: ApiTest[] = [], t: LocaleApi["t"] = (key, params) => translate("en", key, params)): Run {
   return {
     id: run.id,
     test: tests.find((test) => test.id === run.testId)?.name ?? run.testId,
@@ -2660,7 +2666,7 @@ function runForUi(run: ApiRun, tests: ApiTest[] = []): Run {
         ? "—"
         : formatDuration(Date.parse(run.endedAt) - Date.parse(run.startedAt)),
     status: run.status === "queued" ? "running" : run.status,
-    time: relativeTime(run.createdAt),
+    time: relativeTime(run.createdAt, t),
   };
 }
 function formatDuration(milliseconds: number): string {
@@ -2668,15 +2674,16 @@ function formatDuration(milliseconds: number): string {
   const seconds = Math.round(milliseconds / 1000);
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
-function relativeTime(value: string): string {
+function relativeTime(value: string, t: LocaleApi["t"] = (key, params) => translate("en", key, params)): string {
   const seconds = Math.max(
     0,
     Math.round((Date.now() - Date.parse(value)) / 1000),
   );
-  return seconds < 60 ? "Now" : `${Math.floor(seconds / 60)}m ago`;
+  return seconds < 60 ? t("time.now") : t("time.minutesAgo", { n: Math.floor(seconds / 60) });
 }
 
 function Root() {
+  const { t } = useLocale();
   const serverBaseUrl = useMemo(() => getApiServerBaseUrl(), []);
   const config = useMemo(() => getApiConfig(), []);
   const authRequired = import.meta.env["VITE_OPENTESTPILOT_AUTH_REQUIRED"] === "true";
@@ -2706,9 +2713,9 @@ function Root() {
         <div className="login-root">
           <div className="login-card">
             <div className="login-brand"><div className="login-brand-mark">O</div><div><strong>OpenTestPilot</strong></div></div>
-            <h1>Server not configured</h1>
-            <p>VITE_OPENTESTPILOT_URL is not set. Configure the server URL to enable OAuth login.</p>
-            <button className="login-github-button" onClick={() => { window.location.href = "/"; }}>Back</button>
+            <h1>{t("serverNotConfigured.title")}</h1>
+            <p>{t("serverNotConfigured.body")}</p>
+            <button className="login-github-button" onClick={() => { window.location.href = "/"; }}>{t("serverNotConfigured.back")}</button>
           </div>
         </div>
       );
@@ -2722,4 +2729,13 @@ function Root() {
   return <App sessionToken={session?.sessionToken ?? config?.sessionToken} login={session?.login} organizationId={organizationId} organizationName={session?.organizationName} serverBaseUrl={serverBaseUrl} onLogout={session === undefined ? undefined : handleLogout} />;
 }
 
-createRoot(document.getElementById("root")!).render(<Root />);
+function RootWithLocale() {
+  const localeApi = useLocaleState();
+  return (
+    <LocaleContext.Provider value={localeApi}>
+      <Root />
+    </LocaleContext.Provider>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<RootWithLocale />);
