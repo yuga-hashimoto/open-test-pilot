@@ -24,7 +24,7 @@
 
 **Files:**
 - Create: `apps/web/playwright.ui.config.ts`
-- Create: `apps/web/e2e/ui-usability.spec.ts`
+- Create: `apps/web/e2e/ui-usability.pw.ts`
 
 **Interfaces:**
 - Consumes: Vite dev server command `pnpm dev --host 127.0.0.1` and the demo UI at `http://127.0.0.1:4173`.
@@ -39,7 +39,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: '**/*.spec.ts',
+  testMatch: '**/*.pw.ts',
+  outputDir: '../../.testpilot/ui-usability',
   reporter: 'line',
   use: {
     baseURL: 'http://127.0.0.1:4173',
@@ -54,7 +55,7 @@ export default defineConfig({
 });
 ```
 
-Create `apps/web/e2e/ui-usability.spec.ts`:
+Create `apps/web/e2e/ui-usability.pw.ts`:
 
 ```ts
 import { expect, test } from '@playwright/test';
@@ -127,7 +128,7 @@ Expected: FAIL at the 390px overflow assertion because the existing stylesheet s
 - [ ] **Step 3: Commit the regression coverage**
 
 ```bash
-git add apps/web/playwright.ui.config.ts apps/web/e2e/ui-usability.spec.ts
+git add apps/web/playwright.ui.config.ts apps/web/e2e/ui-usability.pw.ts
 git commit -m "test(web): cover responsive usability"
 ```
 
