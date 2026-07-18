@@ -25,3 +25,4 @@ examples/**/*.js.map
 !.env.example
 .secrets/
 .playwright-cli/
+.worktrees/
