@@ -99,6 +99,7 @@ footer {
 }
 
 .live-list,
+.manifest-editor,
 .empty-state,
 .empty-state.compact,
 .editor-panel,
@@ -139,6 +140,53 @@ footer {
 .content-grid > *,
 .bottom-grid > * {
   min-width: 0;
+}
+
+.editor-form,
+.live-list-body form {
+  display: grid;
+  gap: 14px;
+}
+
+.editor-form-field,
+.editor-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: #aebdd0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.live-list-body form .editor-form-field {
+  margin-bottom: 0;
+}
+
+.editor-form-field input,
+.editor-form-field textarea,
+.editor-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-min-height);
+  padding: 10px 12px;
+  border: 1px solid #29435f;
+  border-radius: 7px;
+  background: #081523;
+  color: var(--text);
+  font: 12px/1.45 Manrope, ui-sans-serif, sans-serif;
+}
+
+.editor-form-field textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.editor-form-field input:disabled,
+.editor-form-field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
 }
 
 .monaco-editor-shell,

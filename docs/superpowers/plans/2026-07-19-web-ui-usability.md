@@ -511,7 +511,7 @@ Run:
 pnpm --filter @open-test-pilot/web exec playwright test --config=playwright.ui.config.ts
 ```
 
-Expected: `6 passed`; no viewport overflow, mobile navigation width, type-size, target-height, or focus-outline failure remains.
+Expected: `7 passed`; no viewport overflow, mobile navigation width, type-size, target-height, settings-form, or focus-outline failure remains.
 
 - [ ] **Step 4: Run web static and unit checks**
 

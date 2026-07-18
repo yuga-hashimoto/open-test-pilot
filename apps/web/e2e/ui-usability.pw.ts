@@ -39,6 +39,15 @@ test('mobile presents full-width reachable navigation and readable controls', as
   expect(await panelDescription.evaluate((element) =>
     Number.parseFloat(getComputedStyle(element).fontSize),
   )).toBeGreaterThanOrEqual(12);
+
+  for (const destination of ['実行履歴', 'テスト', '設定']) {
+    await page.locator('.sidebar .nav-item').filter({ hasText: destination }).click();
+    const destinationOverflow = await page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(destinationOverflow).toBeLessThanOrEqual(1);
+    await expect(page.locator('.run-button').first()).toBeInViewport();
+  }
 });
 
 test('keyboard focus is visually obvious on the primary action', async ({ page }) => {
@@ -52,4 +61,25 @@ test('keyboard focus is visually obvious on the primary action', async ({ page }
   });
   expect(outline.style).not.toBe('none');
   expect(outline.width).toBeGreaterThanOrEqual(2);
+});
+
+test('settings forms use readable themed controls without oversized panels', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '設定' }).click();
+
+  const retentionPanel = page.locator('.settings-grid .manifest-editor');
+  const input = retentionPanel.locator('input').first();
+  const inputBox = await input.boundingBox();
+  const panelBox = await retentionPanel.boundingBox();
+  const inputStyle = await input.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, color: style.color };
+  });
+
+  expect(inputBox?.height).toBeGreaterThanOrEqual(40);
+  expect(inputBox?.width).toBeLessThan(panelBox?.width ?? 0);
+  expect(inputStyle.background).toBe('rgb(8, 21, 35)');
+  expect(inputStyle.color).toBe('rgb(232, 238, 248)');
+  expect(panelBox?.height).toBeLessThan(360);
 });
