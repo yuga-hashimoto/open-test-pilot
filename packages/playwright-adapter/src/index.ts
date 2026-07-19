@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { chromium, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
+import { chromium, request as playwrightRequest, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
+import { executeApiAction, type ApiAction, type ApiTransport } from '@open-test-pilot/api-adapter';
 import type { Manifest, ManifestAction } from '@open-test-pilot/manifest-schema';
 import { redactSecrets, type ActionResult, type Artifact, type FailureCategory, type StepResult, type TestRunResult } from '@open-test-pilot/result-schema';
 
@@ -12,6 +13,7 @@ export interface ExecuteManifestOptions {
   timeoutMs?: number;
   customActions?: Record<string, CustomActionExecutor>;
   secretProviders?: Record<string, SecretValueProvider>;
+  apiTransport?: ApiTransport;
 }
 
 export interface CustomActionPermissions { network?: string[]; filesystem?: { read?: string[]; write?: string[] }; secrets?: string[]; }
@@ -159,8 +161,9 @@ async function captureFailureMetadata(artifacts: Artifact[], page: Page | undefi
   ];
 }
 
-async function executeAction(action: ManifestAction, manifest: Manifest, page: Page, request: APIRequestContext, timeoutMs: number, context: ExecutionContext, options: ExecuteManifestOptions): Promise<void> {
+async function executeAction(action: ManifestAction, manifest: Manifest, page: Page | undefined, request: APIRequestContext | undefined, timeoutMs: number, context: ExecutionContext, options: ExecuteManifestOptions): Promise<void> {
   const locator = (selector: string, target = action.target): Locator => {
+    if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
     if (target?.role !== undefined) return page.getByRole(target.role as Parameters<Page['getByRole']>[0], target.name === undefined ? {} : { name: target.name });
     if (target?.label !== undefined) return page.getByLabel(target.label);
     if (target?.text !== undefined) return page.getByText(target.text);
@@ -178,6 +181,7 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
   };
   switch (action.type) {
     case 'web.goto':
+      if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
       await page.goto(resolveValue(action.url ?? '', manifest, context), { timeout: timeoutMs, waitUntil: 'domcontentloaded' });
       // domcontentloaded fires before client-side hydration finishes, which lets a fast
       // fill/click race ahead of the framework attaching its event handlers. Waiting for
@@ -186,15 +190,19 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       await page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => undefined);
       return;
     case 'web.fill':
+      if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
       await locator(action.selector ?? '').fill(resolveValue(action.value ?? '', manifest, context), { timeout: timeoutMs });
       return;
     case 'web.click':
+      if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
       await locator(action.selector ?? '').click({ timeout: timeoutMs });
       return;
     case 'web.expectVisible':
+      if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
       await locator(action.selector ?? '').waitFor({ state: 'visible', timeout: timeoutMs });
       return;
     case 'web.expectText':
+      if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
       await locator(action.selector ?? '').waitFor({ state: 'visible', timeout: timeoutMs });
       if ((await locator(action.selector ?? '').innerText()) !== resolveValue(action.expectedText ?? '', manifest, context)) {
         throw new Error(`Expected text ${action.expectedText ?? ''} in ${action.selector ?? ''}`);
@@ -202,6 +210,7 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       return;
     case 'web.screenshot':
       {
+        if (page === undefined) throw new Error(`Web action '${action.type}' requires a browser page`);
         const relativePath = `screenshot/${resolveValue(action.name ?? action.id, manifest, context).replace(/^\/+/, '')}`;
         const screenshotPath = join(options.outputDir, relativePath.endsWith('.png') ? relativePath : `${relativePath}.png`);
         await mkdir(join(screenshotPath, '..'), { recursive: true });
@@ -210,20 +219,21 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       }
       return;
     case 'api.request': {
-      const requestOptions = {
+      const resolvedAction = {
+        ...action,
         method: action.method ?? 'GET',
-        data: resolveAny(action.body, manifest, context),
-        timeout: timeoutMs,
-        ...(action.headers === undefined ? {} : { headers: resolveAny(action.headers, manifest, context) as Record<string, string> }),
-      };
-      const response = await request.fetch(resolveValue(action.url ?? '', manifest, context), requestOptions);
-      const body: unknown = await response.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
-      const expectedStatus = action.expectedStatus === undefined ? [200] : Array.isArray(action.expectedStatus) ? action.expectedStatus : [action.expectedStatus];
-      if (!expectedStatus.includes(response.status())) throw new Error(`API expected status ${expectedStatus.join(',')} but received ${response.status()}`);
-      for (const [path, expected] of Object.entries(action.jsonAssertions ?? {})) if (readObjectPath(body, path) !== expected) throw new Error(`API JSON assertion failed at ${path}`);
+        url: resolveValue(action.url ?? '', manifest, context),
+        headers: action.headers === undefined ? undefined : resolveAny(action.headers, manifest, context) as Record<string, string>,
+        body: resolveAny(action.body, manifest, context),
+      } as ApiAction;
+      const transport = options.apiTransport ?? (request === undefined ? undefined : createPlaywrightApiTransport(request));
+      if (transport === undefined) throw new Error('API request requires an HTTP transport');
+      const result = await executeApiAction(resolvedAction, { transport });
       if (action.outputs !== undefined) {
-        const output = Object.fromEntries(Object.entries(action.outputs).map(([key, path]) => [key, readObjectPath(body, path)]));
-        context.stepOutputs[action.id] = { response: { status: response.status(), body }, ...output };
+        const output = Object.fromEntries(Object.entries(action.outputs).map(([key, path]) => [key, readObjectPath(result.body, path)]));
+        context.stepOutputs[action.id] = { response: { status: result.status, headers: result.headers, body: result.body }, ...output };
+      } else {
+        context.stepOutputs[action.id] = { response: { status: result.status, headers: result.headers, body: result.body } };
       }
       return;
     }
@@ -359,8 +369,26 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
   }
 }
 
-async function executeActions(actions: ManifestAction[], manifest: Manifest, page: Page, request: APIRequestContext, timeoutMs: number, context: ExecutionContext, options: ExecuteManifestOptions): Promise<void> {
+async function executeActions(actions: ManifestAction[], manifest: Manifest, page: Page | undefined, request: APIRequestContext | undefined, timeoutMs: number, context: ExecutionContext, options: ExecuteManifestOptions): Promise<void> {
   for (const action of actions) await executeAction(action, manifest, page, request, timeoutMs, context, options);
+}
+
+function createPlaywrightApiTransport(request: APIRequestContext): ApiTransport {
+  return {
+    async request(input) {
+      const started = Date.now();
+      const response = await request.fetch(input.url, {
+        method: input.method,
+        ...(input.timeoutMs === undefined ? {} : { timeout: input.timeoutMs }),
+        ...(input.headers === undefined ? {} : { headers: input.headers }),
+        ...(input.body === undefined ? {} : { data: input.body }),
+      });
+      const text = await response.text();
+      let body: unknown = text;
+      try { body = JSON.parse(text) as unknown; } catch { /* preserve text responses */ }
+      return { status: response.status(), headers: response.headers(), body, durationMs: Date.now() - started };
+    },
+  };
 }
 
 function readObjectPath(value: unknown, path: string): unknown { return path.replace(/^\$\.?/, '').split('.').filter(Boolean).reduce<unknown>((current, part) => current !== null && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined, value); }
@@ -379,7 +407,9 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
   const consoleLog: string[] = [];
   const networkLog: string[] = [];
   const browserName = options.browser ?? 'chromium';
-  const metadata = { browser: browserName === 'chromium' ? 'Chromium' : browserName === 'firefox' ? 'Firefox' : 'WebKit', browserVersion: 'unknown', viewport: { width: 1280, height: 720 } };
+  const allActions = [...manifest.setup, ...manifest.steps, ...manifest.cleanup].flatMap((step) => step.actions);
+  const requiresBrowser = allActions.some((action) => action.type.startsWith('web.'));
+  const metadata = { browser: requiresBrowser ? (browserName === 'chromium' ? 'Chromium' : browserName === 'firefox' ? 'Firefox' : 'WebKit') : 'none', browserVersion: 'unknown', viewport: { width: 1280, height: 720 } };
   const executionContext: ExecutionContext = {
     variables: {},
     stepOutputs: {},
@@ -398,21 +428,25 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
 
   try {
     await mkdir(options.outputDir, { recursive: true });
-    const browserType = browserName === 'chromium' ? chromium : (await import('playwright'))[browserName];
-    browser = await browserType.launch({
-      ...(process.env['PLAYWRIGHT_EXECUTABLE_PATH'] === undefined ? {} : { executablePath: process.env['PLAYWRIGHT_EXECUTABLE_PATH'] }),
-      ...(process.env['PLAYWRIGHT_NO_SANDBOX'] === 'true' ? { args: ['--no-sandbox', '--disable-crashpad', '--disable-crash-reporter', '--disable-breakpad', '--noerrdialogs'] } : {}),
-    });
-    browserContext = await browser.newContext({ viewport: metadata.viewport });
-    if (manifest.artifacts.traces === true) {
-      await browserContext.tracing.start({ screenshots: true, snapshots: true, sources: false });
-      traceActive = true;
+    if (requiresBrowser) {
+      const browserType = browserName === 'chromium' ? chromium : (await import('playwright'))[browserName];
+      browser = await browserType.launch({
+        ...(process.env['PLAYWRIGHT_EXECUTABLE_PATH'] === undefined ? {} : { executablePath: process.env['PLAYWRIGHT_EXECUTABLE_PATH'] }),
+        ...(process.env['PLAYWRIGHT_NO_SANDBOX'] === 'true' ? { args: ['--no-sandbox', '--disable-crashpad', '--disable-crash-reporter', '--disable-breakpad', '--noerrdialogs'] } : {}),
+      });
+      browserContext = await browser.newContext({ viewport: metadata.viewport });
+      if (manifest.artifacts.traces === true) {
+        await browserContext.tracing.start({ screenshots: true, snapshots: true, sources: false });
+        traceActive = true;
+      }
+      page = await browserContext.newPage();
+      request = browserContext.request;
+      page.on('console', (message) => consoleLog.push(JSON.stringify({ type: message.type(), text: message.text() })));
+      page.on('request', (requestEvent) => networkLog.push(JSON.stringify({ type: 'request', method: requestEvent.method(), url: requestEvent.url() })));
+      page.on('response', (responseEvent) => networkLog.push(JSON.stringify({ type: 'response', status: responseEvent.status(), url: responseEvent.url() })));
+    } else if (options.apiTransport === undefined) {
+      request = await playwrightRequest.newContext();
     }
-    page = await browserContext.newPage();
-    request = browserContext.request;
-    page.on('console', (message) => consoleLog.push(JSON.stringify({ type: message.type(), text: message.text() })));
-    page.on('request', (requestEvent) => networkLog.push(JSON.stringify({ type: 'request', method: requestEvent.method(), url: requestEvent.url() })));
-    page.on('response', (responseEvent) => networkLog.push(JSON.stringify({ type: 'response', status: responseEvent.status(), url: responseEvent.url() })));
     for (const step of [...manifest.setup, ...manifest.steps, ...manifest.cleanup]) {
       const stepStartedAt = now();
       const actionResults: ActionResult[] = [];
@@ -485,6 +519,7 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
     }
     if (consoleLog.length > 0) await addArtifact(artifacts, options.outputDir, 'console', 'logs/console.log', redactText(consoleLog.join('\n'), executionContext.secrets));
     if (networkLog.length > 0) await addArtifact(artifacts, options.outputDir, 'network', 'logs/network.log', redactText(networkLog.join('\n'), executionContext.secrets));
+    if (browser === undefined && options.apiTransport === undefined) await request?.dispose();
     await browser?.close();
   }
 

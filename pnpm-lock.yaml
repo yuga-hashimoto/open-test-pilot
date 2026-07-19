@@ -292,6 +292,9 @@ importers:
 
   packages/playwright-adapter:
     dependencies:
+      '@open-test-pilot/api-adapter':
+        specifier: workspace:*
+        version: link:../api-adapter
       '@open-test-pilot/manifest-schema':
         specifier: workspace:*
         version: link:../manifest-schema

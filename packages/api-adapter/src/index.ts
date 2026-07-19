@@ -52,6 +52,7 @@ export interface ApiExecutionContext {
   transport?: ApiTransport;
   fetcher?: typeof fetch;
   allowedHosts?: string[];
+  enforcePolicy?: boolean;
 }
 
 export interface ApiPolicyOptions {
@@ -112,7 +113,9 @@ export async function executeApiAction(
   const started = Date.now();
   const resolvedUrl = buildRequestUrl(action.url, action.pathParams, action.query);
   const policyHosts = action.allowedHosts ?? context.allowedHosts;
-  assertApiPolicy(resolvedUrl, policyHosts === undefined ? {} : { allowedHosts: policyHosts });
+  if (context.enforcePolicy === true || action.allowedHosts !== undefined || context.allowedHosts !== undefined) {
+    assertApiPolicy(resolvedUrl, policyHosts === undefined ? {} : { allowedHosts: policyHosts });
+  }
 
   const { headers, body } = buildRequestPayload(action);
   const signal = action.timeoutMs === undefined ? undefined : AbortSignal.timeout(action.timeoutMs);
@@ -194,7 +197,7 @@ export async function executeApiAction(
 
 function normalizeContext(fetcherOrContext: typeof fetch | ApiExecutionContext): ApiExecutionContext {
   if (typeof fetcherOrContext === 'function') {
-    return { fetcher: fetcherOrContext };
+    return { fetcher: fetcherOrContext, enforcePolicy: true };
   }
   return fetcherOrContext;
 }
