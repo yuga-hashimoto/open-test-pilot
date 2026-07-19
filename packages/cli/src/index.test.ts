@@ -123,6 +123,47 @@ describe('testpilot CLI', () => {
     expect(output.join('\n')).toContain('run:');
   });
 
+  it('emits machine-readable JSON for validate, generate, and run with --json', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-json-'));
+    const manifestPath = join(directory, 'test.yaml');
+    await writeFile(manifestPath, manifest, 'utf8');
+
+    const validateOutput: string[] = [];
+    expect(await runCli(['manifest', 'validate', manifestPath, '--json'], validateOutput)).toBe(0);
+    expect(JSON.parse(validateOutput[0] ?? '')).toEqual({ command: 'manifest.validate', ok: true, file: manifestPath, diagnostics: [] });
+
+    const generateOutput: string[] = [];
+    expect(await runCli(['manifest', 'generate', manifestPath, '--json'], generateOutput)).toBe(0);
+    const generated = JSON.parse(generateOutput[0] ?? '') as { ok: boolean; generatedPath: string; sourceMapPath: string };
+    expect(generated.ok).toBe(true);
+    expect(generated.generatedPath).toContain('generated/cli-test.spec.ts');
+    expect(generated.sourceMapPath).toBe(`${generated.generatedPath}.map.json`);
+
+    const actionPath = join(directory, 'actions.mjs');
+    await writeFile(actionPath, "export default { 'test.action': { async execute() { return { ok: true }; } } };\n", 'utf8');
+    const runManifestPath = join(directory, 'run.yaml');
+    await writeFile(runManifestPath, manifest.replace('id: cli-test', 'id: cli-json-run').replace('steps: []', 'steps:\n  - id: custom\n    actions:\n      - id: action\n        type: custom.action\n        actionType: test.action\n'), 'utf8');
+    const runOutput: string[] = [];
+    expect(await runCli(['run', runManifestPath, '--actions', actionPath, '--json'], runOutput)).toBe(0);
+    const runResult = JSON.parse(runOutput[0] ?? '') as { command: string; ok: boolean; runId: string; status: string; reportPath: string; htmlReportPath: string; failures: unknown[] };
+    expect(runResult.command).toBe('run');
+    expect(runResult.ok).toBe(true);
+    expect(runResult.status).toBe('passed');
+    expect(runResult.runId).toMatch(/^run-/);
+    expect(runResult.failures).toEqual([]);
+  });
+
+  it('reports diagnostics as JSON with a non-zero exit code for invalid manifests', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-json-invalid-'));
+    const manifestPath = join(directory, 'invalid.yaml');
+    await writeFile(manifestPath, 'id: missing-required-fields\n', 'utf8');
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'validate', manifestPath, '--json'], output)).toBe(1);
+    const parsed = JSON.parse(output[0] ?? '') as { ok: boolean; diagnostics: Array<{ code: string }> };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics.length).toBeGreaterThan(0);
+  });
+
   it('exports an independent generated project as a ZIP', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-export-'));
     const manifestPath = join(directory, 'test.yaml');

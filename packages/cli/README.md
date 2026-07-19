@@ -16,3 +16,18 @@ Use `testpilot --help` or `testpilot run --help` for the complete command synops
 ```
 
 The export contains the original Manifest, generated TypeScript, source map, a minimal dependency manifest, and a README for independent execution.
+
+## Machine-readable output for agents
+
+`manifest validate`, `manifest generate`, and `run` accept `--json` and print a single JSON object instead of prose. This is the recommended interface for AI agents (Claude Code, the MCP server, CI scripts) that need to parse results reliably:
+
+```bash
+testpilot manifest validate examples/manifests/fixture-login.yaml --json
+# {"command":"manifest.validate","ok":true,"file":"…","diagnostics":[]}
+
+testpilot run examples/manifests/fixture-login.yaml --json
+# {"command":"run","ok":true,"file":"…","runId":"run-…","status":"passed",
+#  "reportPath":"…/report.json","htmlReportPath":"…/index.html","failures":[]}
+```
+
+`ok` mirrors the process exit code (`true` ⇔ exit 0). Validation problems appear in `diagnostics` (severity, code, path, message); failed runs list each failed action in `failures` with its `stepId`, `actionId`, `type`, and structured `error`.

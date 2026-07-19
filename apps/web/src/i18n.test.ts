@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectBrowserLocale, translate } from "./i18n.js";
+import { detectBrowserLocale, dictionaries, translate } from "./i18n.js";
 
 describe("locale detection", () => {
   it("uses Japanese for Japanese browser locales", () => {
@@ -17,5 +17,11 @@ describe("translation", () => {
   it("interpolates translated values", () => {
     expect(translate("ja", "time.minutesAgo", { n: 5 })).toBe("5分前");
     expect(translate("en", "time.minutesAgo", { n: 5 })).toBe("5m ago");
+  });
+
+  it("keeps English and Japanese dictionaries in sync", () => {
+    const englishKeys = Object.keys(dictionaries.en).sort();
+    const japaneseKeys = Object.keys(dictionaries.ja).sort();
+    expect(japaneseKeys).toEqual(englishKeys);
   });
 });
