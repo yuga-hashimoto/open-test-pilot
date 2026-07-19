@@ -18,6 +18,7 @@
     "@open-test-pilot/generator": "workspace:*",
     "@open-test-pilot/local-runner": "workspace:*",
     "@open-test-pilot/manifest-migrator": "workspace:*",
+    "@open-test-pilot/manifest-schema": "workspace:*",
     "@open-test-pilot/playwright-adapter": "workspace:*",
     "@open-test-pilot/manifest-parser": "workspace:*",
     "@open-test-pilot/source-analyzer": "workspace:*",
