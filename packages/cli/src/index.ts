@@ -14,6 +14,52 @@ import { generateManifestFromSource, type ManifestGenerationOptions } from '@ope
 
 interface ExportFile { name: string; content: string; }
 
+const CLI_VERSION = '0.1.0';
+const HELP = `Usage: testpilot <command>
+
+Commands:
+  testpilot manifest validate <file>               Validate a test Manifest
+  testpilot manifest generate <file>               Generate an executable test
+  testpilot manifest migrate <file> [--approve]    Preview or apply a Manifest migration
+  testpilot manifest diff <before> <after>         Compare two Manifests
+  testpilot manifest export <file> --output <path> Export a standalone project
+  testpilot source analyze <source> [options]      Analyze source into a Manifest
+  testpilot run <file> [--actions <module>]        Execute a Manifest locally
+  testpilot report <report.json>                   Render an HTML report
+
+Global options:
+  --help, -h                                       Show this help
+  --version, -v                                    Show the CLI version`;
+
+const RUN_HELP = `Usage: testpilot run <manifest> [--actions <module>]
+
+Executes a validated Manifest with the local runner and writes a report.`;
+
+function writeHelp(args: string[], output: string[]): number | undefined {
+  const first = args[0];
+  if (first === '--version' || first === '-v') {
+    output.push(`testpilot v${CLI_VERSION}`);
+    return 0;
+  }
+  if (first === '--help' || first === '-h') {
+    output.push(HELP);
+    return 0;
+  }
+  if (first === 'run' && (args[1] === '--help' || args[1] === '-h')) {
+    output.push(RUN_HELP);
+    return 0;
+  }
+  if (first === 'manifest' && (args[1] === '--help' || args[1] === '-h')) {
+    output.push(`${HELP}\n\nManifest commands accept --help for this overview.`);
+    return 0;
+  }
+  if (first === 'source' && (args[1] === '--help' || args[1] === '-h')) {
+    output.push(`${HELP}\n\nSource analysis options: --platform, --framework, --output, --repository, --base-url, --id, --name, --generated-code`);
+    return 0;
+  }
+  return undefined;
+}
+
 function crc32(value: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of value) {
@@ -102,6 +148,8 @@ async function exportManifestProject(input: string, outputPath: string): Promise
 }
 
 export async function runCli(args: string[], output: string[] = []): Promise<number> {
+  const helpResult = writeHelp(args, output);
+  if (helpResult !== undefined) return helpResult;
   const [group, command, input, ...rest] = args;
   if (group === 'manifest' && (command === 'validate' || command === 'generate') && input !== undefined) {
     const source = await readFile(input, 'utf8');
@@ -226,7 +274,7 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     return 0;
   }
 
-  output.push('Usage: testpilot source analyze <source> [--output <manifest.yaml>] | manifest validate <file> | manifest generate <file> | manifest migrate <file> [--approve] | manifest diff <before> <after> | manifest export <file> --output <directory|file.zip> | run <file> [--actions <module>] | report <report.json>');
+  output.push(HELP);
   return 2;
 }
 

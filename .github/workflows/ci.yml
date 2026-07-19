@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -42,7 +43,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm testpilot manifest validate examples/manifests/fixture-login.yaml
+      - run: pnpm test:web:ui
 
   manifest-integration:
     runs-on: ubuntu-latest

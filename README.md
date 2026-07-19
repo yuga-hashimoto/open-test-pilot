@@ -179,7 +179,7 @@ Mobile setup is documented separately in [Android with Appium](docs/ANDROID_APPI
 
 OpenTestPilot is at **v0.1.0** and under active development. The repository contains and tests the local vertical slice, team API/dashboard, runner and artifact upload path, scheduler, GitHub adapters, Appium boundaries, MCP/Claude Code integration, policy-gated AI Worker, Docker Compose, and Helm packaging.
 
-Use the repository-local commands in this README. Publishing packages or images to a registry, running a hosted control plane, providing production secrets, and attaching real mobile devices remain separate release or operator steps. See [Acceptance Evidence](docs/ACCEPTANCE_EVIDENCE.md) for executed scenarios and [Requirement Audit](docs/REQUIREMENT_AUDIT.md) for the implementation boundary.
+Use the repository-local commands in this README. Publishing packages or images to a registry, running a hosted control plane, providing production secrets, and attaching real mobile devices remain separate release or operator steps. See [Capability Status](docs/CAPABILITY_STATUS.md) for the current boundary, [Acceptance Evidence](docs/ACCEPTANCE_EVIDENCE.md) for executed scenarios, and [Requirement Audit](docs/REQUIREMENT_AUDIT.md) for the implementation boundary.
 
 ## Repository structure
 
@@ -210,6 +210,9 @@ docs/             Product, architecture, protocol, security, and operations docs
 | --- | --- |
 | Product scope and complete plan | [Master Implementation Plan](docs/MASTER_IMPLEMENTATION_PLAN.md) |
 | Architecture and domain model | [System Architecture](docs/SYSTEM_ARCHITECTURE.md) · [Domain Model](docs/DOMAIN_MODEL.md) |
+| Contributor and agent orientation | [Repository Map](docs/REPO_MAP.md) · [AGENTS.md](AGENTS.md) |
+| Configuration and operator setup | [Configuration](docs/CONFIGURATION.md) · [Deployment](docs/DEPLOYMENT.md) |
+| Release handoff | [Release checklist](docs/RELEASE.md) |
 | Manifest language | [Manifest DSL Specification](docs/MANIFEST_DSL_SPEC.md) |
 | HTTP and MCP APIs | [HTTP API](docs/HTTP_API_SPEC.md) · [MCP API](docs/MCP_API_SPEC.md) |
 | Runner and agent contracts | [Runner Protocol](docs/RUNNER_PROTOCOL.md) · [Agent Protocol](docs/AGENT_PROTOCOL.md) |
@@ -227,6 +230,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:web:ui
 ```
 
 Additional release and safety checks are listed in [Acceptance Evidence](docs/ACCEPTANCE_EVIDENCE.md#repeatable-gates).

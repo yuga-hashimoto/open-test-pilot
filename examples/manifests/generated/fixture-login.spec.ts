@@ -1,3 +1,6 @@
+// GENERATED FILE — do not edit directly.
+// Source: examples/manifests/fixture-login.yaml
+// Regenerate with: pnpm testpilot manifest generate examples/manifests/fixture-login.yaml
 import { test, expect } from '@playwright/test';
 
 const vars: Record<string, unknown> = {};

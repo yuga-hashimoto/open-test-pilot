@@ -1,3 +1,6 @@
+// GENERATED FILE — do not edit directly.
+// Source: examples/manifests/android-settings.yaml
+// Regenerate with: pnpm testpilot manifest generate examples/manifests/android-settings.yaml
 import assert from 'node:assert/strict';
 import { remote } from 'webdriverio';
 

@@ -3,7 +3,11 @@
     "open-test-pilot": {
       "command": "testpilot-mcp",
       "args": [],
-      "env": { "OPENTESTPILOT_URL": "${OPENTESTPILOT_URL}" }
+      "env": {
+        "OPENTESTPILOT_URL": "${OPENTESTPILOT_URL}",
+        "OPENTESTPILOT_ORGANIZATION_ID": "${OPENTESTPILOT_ORGANIZATION_ID}",
+        "OPENTESTPILOT_SESSION_TOKEN": "${OPENTESTPILOT_SESSION_TOKEN}"
+      }
     }
   }
 }

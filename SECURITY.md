@@ -1,5 +1,7 @@
 # Security
 
+For a private report, use [GitHub Security Advisories](https://github.com/yuga-hashimoto/open-test-pilot/security/advisories/new) rather than a public issue.
+
 Do not disclose credentials, private keys, or tenant data in issues. Report a
 suspected vulnerability privately to the maintainers with reproduction steps,
 impact, and affected versions. Rotate any credential that appears in logs or

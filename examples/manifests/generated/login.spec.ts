@@ -1,3 +1,6 @@
+// GENERATED FILE — do not edit directly.
+// Source: examples/manifests/login.yaml
+// Regenerate with: pnpm testpilot manifest generate examples/manifests/login.yaml
 import { test, expect } from '@playwright/test';
 
 const vars: Record<string, unknown> = {};

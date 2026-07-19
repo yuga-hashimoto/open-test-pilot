@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2024", "DOM", "DOM.Iterable"], "jsx": "react-jsx", "noEmit": true, "composite": false },
+  "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2024", "DOM", "DOM.Iterable"], "jsx": "react-jsx", "noEmit": true, "composite": true },
   "include": ["src/**/*.tsx", "src/**/*.ts"]
 }

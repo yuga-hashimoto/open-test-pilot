@@ -79,6 +79,11 @@ export async function handleMcpMessage(request: McpRequest, client: PlatformClie
       const argumentsValue = params['arguments'];
       if (typeof name !== 'string' || argumentsValue === null || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) return { jsonrpc: '2.0', id: request.id, error: { code: -32602, message: 'tools/call requires name and object arguments' } };
       const argumentsRecord = argumentsValue as Record<string, unknown>;
+      const tool = tools.find((candidate) => candidate.name === name);
+      if (tool !== undefined) {
+        const missing = tool.inputSchema.required.filter((key) => typeof argumentsRecord[key] !== 'string' || String(argumentsRecord[key]).trim() === '');
+        if (missing.length > 0) return { jsonrpc: '2.0', id: request.id, error: { code: -32602, message: `${name} requires: ${missing.join(', ')}` } };
+      }
       const methodByTool: Record<string, keyof PlatformClient> = {
         organization_get: 'organizationGet', project_get: 'projectGet', repository_get: 'repositoryGet', test_list: 'testList', test_get: 'testGet', test_get_manifest: 'testGetManifest', test_get_generated_code: 'testGetGeneratedCode', change_request_list: 'changeRequestList', change_request_get: 'changeRequestGet', change_request_update: 'changeRequestUpdate', run_start: 'runStart', run_get_status: 'runStatus', run_get_failures: 'runGetFailures', run_get_step: 'runGetStep', run_compare: 'runCompare', artifact_get: 'artifactGet', repair_register: 'repairRegister', pull_request_register: 'pullRequestRegister', report_get_url: 'reportUrl',
       };
@@ -95,12 +100,12 @@ export async function handleMcpMessage(request: McpRequest, client: PlatformClie
   }
 }
 
-function createHttpClient(baseUrl: string, organizationId: string): PlatformClient {
+export function createHttpClient(baseUrl: string, organizationId: string, sessionToken?: string): PlatformClient {
   function assertTenant(input: Record<string, unknown>): void {
     if (input['organizationId'] !== undefined && input['organizationId'] !== organizationId) throw new Error('MCP organizationId does not match the configured tenant');
   }
   async function request(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { accept: 'application/json', 'x-organization-id': organizationId, ...(init?.headers ?? {}) } });
+    const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { accept: 'application/json', 'x-organization-id': organizationId, ...(sessionToken === undefined ? {} : { authorization: `Bearer ${sessionToken}` }), ...(init?.headers ?? {}) } });
     if (!response.ok) throw new Error(`MCP HTTP request failed with ${response.status}`);
     return await response.json() as Record<string, unknown>;
   }
@@ -136,7 +141,8 @@ function createHttpClient(baseUrl: string, organizationId: string): PlatformClie
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const baseUrl = process.env['OPENTESTPILOT_URL'] ?? 'http://127.0.0.1:3001';
   const organizationId = process.env['OPENTESTPILOT_ORGANIZATION_ID'] ?? '';
-  const client = createHttpClient(baseUrl, organizationId);
+  const sessionToken = process.env['OPENTESTPILOT_SESSION_TOKEN'];
+  const client = createHttpClient(baseUrl, organizationId, sessionToken);
   const input = createInterface({ input: process.stdin, terminal: false });
   input.on('line', async (line) => {
     const parsed = JSON.parse(line) as McpRequest;

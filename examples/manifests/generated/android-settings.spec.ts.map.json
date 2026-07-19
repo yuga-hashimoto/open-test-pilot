@@ -6,26 +6,26 @@
     {
       "nodeId": "launch",
       "kind": "action",
-      "startLine": 7,
-      "endLine": 8
+      "startLine": 10,
+      "endLine": 11
     },
     {
       "nodeId": "network",
       "kind": "action",
-      "startLine": 9,
-      "endLine": 10
+      "startLine": 12,
+      "endLine": 13
     },
     {
       "nodeId": "screenshot",
       "kind": "action",
-      "startLine": 11,
-      "endLine": 12
+      "startLine": 14,
+      "endLine": 15
     },
     {
       "nodeId": "settings",
       "kind": "step",
-      "startLine": 6,
-      "endLine": 12
+      "startLine": 9,
+      "endLine": 15
     }
   ]
 }
