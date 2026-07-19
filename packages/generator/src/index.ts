@@ -297,6 +297,9 @@ function appendStep(lines: string[], sourceMap: SourceMapNode[], step: ManifestS
 
 export function generatePlaywright(manifest: Manifest, options: GeneratePlaywrightOptions = {}): GeneratedPlaywright {
   const lines: string[] = [
+    '// GENERATED FILE — do not edit directly.',
+    `// Source: ${manifest.source.path}`,
+    `// Regenerate with: pnpm testpilot manifest generate ${manifest.source.path}`,
     "import { test, expect } from '@playwright/test';",
     ...(options.customActionModule === undefined ? [] : [`import customActions from ${quote(options.customActionModule)};`]),
     '',
@@ -429,6 +432,9 @@ export function generateMobileAppium(manifest: Manifest): GeneratedMobileAppium 
   const serverUrl = launch.capabilities.serverUrl ?? 'http://127.0.0.1:4723';
   const parsed = new URL(serverUrl);
   const lines: string[] = [
+    '// GENERATED FILE — do not edit directly.',
+    `// Source: ${manifest.source.path}`,
+    `// Regenerate with: pnpm testpilot manifest generate ${manifest.source.path}`,
     "import assert from 'node:assert/strict';",
     "import { remote } from 'webdriverio';",
     '',

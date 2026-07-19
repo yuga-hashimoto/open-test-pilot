@@ -6,32 +6,32 @@
     {
       "nodeId": "open-login",
       "kind": "action",
-      "startLine": 52,
-      "endLine": 54
+      "startLine": 55,
+      "endLine": 57
     },
     {
       "nodeId": "fill-email",
       "kind": "action",
-      "startLine": 55,
-      "endLine": 56
+      "startLine": 58,
+      "endLine": 59
     },
     {
       "nodeId": "submit-login",
       "kind": "action",
-      "startLine": 57,
-      "endLine": 58
+      "startLine": 60,
+      "endLine": 61
     },
     {
       "nodeId": "assert-dashboard",
       "kind": "action",
-      "startLine": 59,
-      "endLine": 60
+      "startLine": 62,
+      "endLine": 63
     },
     {
       "nodeId": "login",
       "kind": "step",
-      "startLine": 51,
-      "endLine": 60
+      "startLine": 54,
+      "endLine": 63
     }
   ]
 }

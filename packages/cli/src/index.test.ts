@@ -32,6 +32,21 @@ generatedCode:
 `;
 
 describe('testpilot CLI', () => {
+  it('provides actionable help and version output without treating flags as files', async () => {
+    const help: string[] = [];
+    expect(await runCli(['--help'], help)).toBe(0);
+    expect(help.join('\n')).toContain('testpilot manifest validate');
+    expect(help.join('\n')).toContain('testpilot source analyze');
+
+    const commandHelp: string[] = [];
+    expect(await runCli(['run', '--help'], commandHelp)).toBe(0);
+    expect(commandHelp.join('\n')).toContain('testpilot run <manifest>');
+
+    const version: string[] = [];
+    expect(await runCli(['--version'], version)).toBe(0);
+    expect(version.join('\n')).toMatch(/^testpilot v\d+\.\d+\.\d+$/);
+  });
+
   it('validates and generates a manifest using the documented commands', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'testpilot-cli-'));
     const manifestPath = join(directory, 'test.yaml');

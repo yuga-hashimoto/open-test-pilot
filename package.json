@@ -8,6 +8,7 @@
     "lint": "pnpm -r lint",
     "typecheck": "tsc --build",
     "test": "vitest run",
+    "test:web:ui": "playwright test --config=apps/web/playwright.ui.config.ts",
     "build": "pnpm -r build",
     "testpilot": "tsx packages/cli/src/index.ts",
     "verify:generated": "node scripts/verify-generated-snapshots.mjs",

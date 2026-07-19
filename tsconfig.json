@@ -27,6 +27,7 @@
     { "path": "packages/agent-protocol" },
     { "path": "packages/runner-protocol" },
     { "path": "packages/manifest-parser" },
+    { "path": "packages/manifest-migrator" },
     { "path": "packages/generator" },
     { "path": "packages/playwright-adapter" },
     { "path": "packages/report" },
@@ -49,6 +50,8 @@
     { "path": "packages/authz" },
     { "path": "apps/ai-worker" },
     { "path": "apps/server" },
-    { "path": "apps/runner" }
+    { "path": "apps/runner" },
+    { "path": "apps/scheduler" },
+    { "path": "apps/web" }
   ]
 }

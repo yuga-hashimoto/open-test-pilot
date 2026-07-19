@@ -1,3 +1,6 @@
+// GENERATED FILE — do not edit directly.
+// Source: examples/manifests/complex-flow.yaml
+// Regenerate with: pnpm testpilot manifest generate examples/manifests/complex-flow.yaml
 import { test, expect } from '@playwright/test';
 
 const vars: Record<string, unknown> = {};
