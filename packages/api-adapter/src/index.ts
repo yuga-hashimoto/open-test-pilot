@@ -93,13 +93,14 @@ export function assertApiPolicy(url: string, options: ApiPolicyOptions = {}): vo
   } catch {
     throw new Error(`API host policy rejected invalid URL: ${url}`);
   }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  const allowed = options.allowedHosts?.map((entry) => entry.toLowerCase());
+  const rawHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const host = normalizeHostForPolicy(rawHost);
+  const allowed = options.allowedHosts?.map((entry) => normalizeHostForPolicy(entry.toLowerCase().replace(/^\[|\]$/g, '')));
   if (allowed && allowed.length > 0 && !hostMatchesAllowlist(host, allowed)) {
-    throw new Error(`API host policy rejected host not in allowlist: ${host}`);
+    throw new Error(`API host policy rejected host not in allowlist: ${rawHost}`);
   }
-  if (isBlockedHost(host) && !(allowed && hostMatchesAllowlist(host, allowed))) {
-    throw new Error(`API host policy blocked dangerous host: ${host}`);
+  if (isBlockedHost(rawHost) && !(allowed && hostMatchesAllowlist(host, allowed))) {
+    throw new Error(`API host policy blocked dangerous host: ${rawHost}`);
   }
 }
 
@@ -167,7 +168,7 @@ export async function executeApiAction(
 
   for (const [headerName, expectedValue] of Object.entries(action.assertHeaders ?? {})) {
     const actual = findHeaderValue(responseHeaders, headerName);
-    if (actual === undefined || !headerValueMatches(actual, expectedValue)) {
+    if (actual === undefined || !headerValueMatches(headerName, actual, expectedValue)) {
       throw new Error(`API header assertion failed for ${headerName}: expected ${expectedValue} but received ${actual ?? '<missing>'}`);
     }
   }
@@ -219,27 +220,38 @@ function buildRequestUrl(
 }
 
 function buildRequestPayload(action: ApiAction): { headers?: Record<string, string>; body?: string } {
-  const contentType = action.contentType ?? (action.body !== undefined && typeof action.body === 'object' && action.body !== null && !(action.body instanceof URLSearchParams)
-    ? 'application/json'
-    : undefined);
+  const explicitContentType = action.contentType ?? findHeaderValue(action.headers ?? {}, 'content-type');
   const headers: Record<string, string> = { ...(action.headers ?? {}) };
-  if (contentType !== undefined && !hasHeader(headers, 'content-type')) {
-    headers['content-type'] = contentType;
-  }
 
   if (action.body === undefined) {
+    if (action.contentType !== undefined && !hasHeader(headers, 'content-type')) {
+      headers['content-type'] = action.contentType;
+    }
     return Object.keys(headers).length === 0 ? {} : { headers };
   }
 
-  const effectiveType = findHeaderValue(headers, 'content-type') ?? contentType ?? '';
+  const effectiveType = (explicitContentType ?? '').toLowerCase();
   let body: string;
   if (effectiveType.includes('application/x-www-form-urlencoded')) {
     body = bodyToUrlSearchParams(action.body).toString();
-  } else if (effectiveType.includes('application/json') || (typeof action.body === 'object' && action.body !== null && !effectiveType.includes('text/'))) {
-    body = typeof action.body === 'string' ? action.body : JSON.stringify(action.body);
-    if (!hasHeader(headers, 'content-type')) headers['content-type'] = 'application/json';
-  } else {
+    if (!hasHeader(headers, 'content-type')) headers['content-type'] = action.contentType ?? 'application/x-www-form-urlencoded';
+  } else if (effectiveType.includes('text/')) {
     body = typeof action.body === 'string' ? action.body : String(action.body);
+    if (!hasHeader(headers, 'content-type') && action.contentType !== undefined) {
+      headers['content-type'] = action.contentType;
+    }
+  } else if (effectiveType.includes('application/json') || explicitContentType === undefined) {
+    // Backward compat: without an explicit contentType, always JSON.stringify (objects and strings).
+    body = JSON.stringify(action.body);
+    if (!hasHeader(headers, 'content-type')) headers['content-type'] = action.contentType ?? 'application/json';
+  } else if (typeof action.body === 'string') {
+    body = action.body;
+    if (!hasHeader(headers, 'content-type') && action.contentType !== undefined) {
+      headers['content-type'] = action.contentType;
+    }
+  } else {
+    body = JSON.stringify(action.body);
+    if (!hasHeader(headers, 'content-type')) headers['content-type'] = action.contentType ?? 'application/json';
   }
 
   return { headers, body };
@@ -270,17 +282,32 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): string {
 }
 
 function isBlockedHost(host: string): boolean {
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
-  if (host.startsWith('fe80:')) return true;
-  if (isIpv4(host)) {
-    const parts = host.split('.').map((part) => Number(part));
+  const normalized = normalizeHostForPolicy(host);
+  if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+  if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
+  if (normalized.startsWith('fe80:')) return true;
+  if (isIpv4(normalized)) {
+    const parts = normalized.split('.').map((part) => Number(part));
     const [a = -1, b = -1] = parts;
     if (a === 127) return true;
     if (a === 0) return true;
     if (a === 169 && b === 254) return true;
   }
   return false;
+}
+
+function normalizeHostForPolicy(host: string): string {
+  const bare = host.toLowerCase().replace(/^\[|\]$/g, '');
+  // Node URL normalizes ::ffff:127.0.0.1 → ::ffff:7f00:1 (brackets stripped above).
+  const mapped = bare.match(/^(?:(?:0:){0,5}|::)ffff:(.+)$/);
+  if (!mapped?.[1]) return bare;
+  const suffix = mapped[1];
+  if (isIpv4(suffix)) return suffix;
+  const hex = suffix.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (!hex?.[1] || !hex[2]) return bare;
+  const hi = Number.parseInt(hex[1], 16);
+  const lo = Number.parseInt(hex[2], 16);
+  return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
 }
 
 function isIpv4(host: string): boolean {
@@ -304,8 +331,13 @@ function findHeaderValue(headers: Record<string, string>, name: string): string 
   return undefined;
 }
 
-function headerValueMatches(actual: string, expected: string): boolean {
-  return actual === expected || actual.toLowerCase().startsWith(expected.toLowerCase());
+function headerValueMatches(headerName: string, actual: string, expected: string): boolean {
+  if (headerName.toLowerCase() === 'content-type') {
+    const actualMedia = actual.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    const expectedMedia = expected.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    return actualMedia === expectedMedia;
+  }
+  return actual.toLowerCase() === expected.toLowerCase();
 }
 
 function normalizeHeaderRecord(headers: Record<string, string>): Record<string, string> {

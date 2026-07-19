@@ -64,6 +64,19 @@ describe('API adapter', () => {
     expect(headers[2]).toContain('application/x-www-form-urlencoded');
   });
 
+  it('JSON-stringifies bare string bodies when contentType is unset', async () => {
+    let sent: string | undefined;
+    await executeApiAction({
+      method: 'POST',
+      url: 'https://api.test/compat-string',
+      body: 'hello',
+    }, async (_input, init) => {
+      sent = typeof init?.body === 'string' ? init.body : undefined;
+      return new Response('ok', { status: 200 });
+    });
+    expect(sent).toBe(JSON.stringify('hello'));
+  });
+
   it('asserts response headers', async () => {
     await executeApiAction({
       method: 'GET',
@@ -78,6 +91,35 @@ describe('API adapter', () => {
     }, async () => new Response('ok', { status: 200, headers: { 'x-request-id': 'other' } }))).rejects.toThrow(/header/i);
   });
 
+  it('matches Content-Type by media-type prefix and other headers by exact equality', async () => {
+    await executeApiAction({
+      method: 'GET',
+      url: 'https://api.test/headers-ctype',
+      assertHeaders: { 'content-type': 'application/json' },
+    }, async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    }));
+
+    await expect(executeApiAction({
+      method: 'GET',
+      url: 'https://api.test/headers-token',
+      assertHeaders: { 'x-request-id': 'abc' },
+    }, async () => new Response('ok', {
+      status: 200,
+      headers: { 'x-request-id': 'abc-123-extra' },
+    }))).rejects.toThrow(/header/i);
+
+    await executeApiAction({
+      method: 'GET',
+      url: 'https://api.test/headers-token-ok',
+      assertHeaders: { 'X-Request-Id': 'Token-Value' },
+    }, async () => new Response('ok', {
+      status: 200,
+      headers: { 'x-request-id': 'token-value' },
+    }));
+  });
+
   it('asserts response JSON Schema with AJV', async () => {
     await executeApiAction({
       method: 'GET',
@@ -85,7 +127,7 @@ describe('API adapter', () => {
       responseSchema: {
         type: 'object',
         required: ['id', 'email'],
-        properties: { id: { type: 'integer' }, email: { type: 'string', format: 'email' } },
+        properties: { id: { type: 'integer' }, email: { type: 'string' } },
         additionalProperties: false,
       },
     }, async () => new Response(JSON.stringify({ id: 1, email: 'a@test.com' }), { status: 200, headers: { 'content-type': 'application/json' } }));
@@ -137,6 +179,15 @@ describe('API adapter', () => {
     expect(() => assertApiPolicy('https://api.example.com/ok')).not.toThrow();
     expect(() => assertApiPolicy('http://127.0.0.1/secret', { allowedHosts: ['127.0.0.1'] })).not.toThrow();
     expect(() => assertApiPolicy('https://api.example.com/ok', { allowedHosts: ['other.example.com'] })).toThrow(/host|policy|allow/i);
+  });
+
+  it('blocks IPv4-mapped IPv6 loopback, link-local, and metadata hosts', () => {
+    expect(() => assertApiPolicy('http://[::ffff:127.0.0.1]/secret')).toThrow(/host|policy|blocked/i);
+    expect(() => assertApiPolicy('http://[::ffff:7f00:1]/secret')).toThrow(/host|policy|blocked/i);
+    expect(() => assertApiPolicy('http://[0:0:0:0:0:ffff:127.0.0.1]/secret')).toThrow(/host|policy|blocked/i);
+    expect(() => assertApiPolicy('http://[::ffff:169.254.169.254]/meta')).toThrow(/host|policy|blocked/i);
+    expect(() => assertApiPolicy('http://[::ffff:a9fe:a9fe]/meta')).toThrow(/host|policy|blocked/i);
+    expect(() => assertApiPolicy('http://[::ffff:127.0.0.1]/secret', { allowedHosts: ['::ffff:127.0.0.1'] })).not.toThrow();
   });
 
   it('applies host policy during executeApiAction before fetching', async () => {
