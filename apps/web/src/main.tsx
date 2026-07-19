@@ -34,6 +34,7 @@ import {
 } from "./api.js";
 import { getOrganizationDisplayName } from "./organization.js";
 import { LocaleContext, translate, useLocale, useLocaleState, type LocaleApi } from "./i18n.js";
+import { buildStarterManifest, slugifyTestName } from "./starterManifest.js";
 import "./style.css";
 import "./usability.css";
 
@@ -41,6 +42,7 @@ type Status = "passed" | "failed" | "running" | "cancelled";
 interface Run {
   id: string;
   test: string;
+  testId: string;
   branch: string;
   duration: string;
   status: Status;
@@ -51,6 +53,7 @@ const demoRuns: Run[] = [
   {
     id: "run-9f31",
     test: "Checkout / guest payment",
+    testId: "test-checkout-guest",
     branch: "main",
     duration: "01:42",
     status: "passed",
@@ -59,6 +62,7 @@ const demoRuns: Run[] = [
   {
     id: "run-9f2c",
     test: "Account / sign in",
+    testId: "test-account-signin",
     branch: "feat/auth-refresh",
     duration: "00:38",
     status: "failed",
@@ -67,6 +71,7 @@ const demoRuns: Run[] = [
   {
     id: "run-9f1a",
     test: "Catalog / search filters",
+    testId: "test-catalog-search",
     branch: "main",
     duration: "00:54",
     status: "passed",
@@ -75,6 +80,7 @@ const demoRuns: Run[] = [
   {
     id: "run-9ee8",
     test: "Account / sign in",
+    testId: "test-account-signin",
     branch: "main",
     duration: "00:12",
     status: "running",
@@ -109,6 +115,10 @@ function StatusPill({ status }: { status: Status }) {
       {status}
     </span>
   );
+}
+
+function pillClassForResultStatus(status: string): string {
+  return status === "passed" ? "pill-passed" : status === "failed" ? "pill-failed" : "pill-running";
 }
 
 const SESSION_KEY = "opentestpilot-session";
@@ -249,6 +259,7 @@ const NAV_I18N_KEYS: Record<string, string> = {
   Runners: "nav.runners",
   Schedules: "nav.schedules",
   GitHub: "nav.github",
+  AI: "nav.ai",
   Settings: "nav.settings",
 };
 
@@ -307,6 +318,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
     ["Runners", "server"],
     ["Schedules", "clock"],
     ["GitHub", "branch"],
+    ["AI", "spark"],
   ];
   const workspaceName = organizationName === undefined && api === undefined ? "Shopfront" : getOrganizationDisplayName(organizationName === undefined ? undefined : { name: organizationName });
   const workspaceSubtitle = organizationName === undefined && api === undefined ? "staging" : "team";
@@ -506,6 +518,9 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
               <span>{t(NAV_I18N_KEYS[label] ?? label)}</span>
               {label === "Runs" && (
                 <em>{api === undefined ? 12 : runs.length}</em>
+              )}
+              {label === "AI" && api !== undefined && (
+                <em>{changeRequests.filter((changeRequest) => changeRequest.status === "open").length}</em>
               )}
             </button>
           ))}
@@ -813,6 +828,9 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
         ) : active === "Tests" ? (
           <TestsView
             tests={tests}
+            runs={runs}
+            projects={projects}
+            api={api}
             onRun={startRun}
             live={api !== undefined}
             searchSignal={testSearchSignal}
@@ -825,6 +843,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             onEdit={openManifestEditor}
             onManifestChange={setManifestText}
             onSave={saveManifest}
+            onTestCreated={(test) => setTests((current) => [test, ...current])}
           />
         ) : active === "Runs" ? (
           <RunsView
@@ -874,6 +893,21 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             }
             onChangeRequestCreated={(changeRequest) =>
               setChangeRequests((current) => [changeRequest, ...current])
+            }
+          />
+        ) : active === "AI" ? (
+          <AiView
+            changeRequests={changeRequests}
+            aiWorkers={aiWorkers}
+            aiWorkerJobs={aiWorkerJobs}
+            live={api !== undefined}
+            api={api}
+            onChangeRequestUpdated={(changeRequest) =>
+              setChangeRequests((current) =>
+                current.map((item) =>
+                  item.id === changeRequest.id ? changeRequest : item,
+                ),
+              )
             }
           />
         ) : active === "Settings" ? (
@@ -1191,6 +1225,9 @@ function Activity({
 
 function TestsView({
   tests,
+  runs,
+  projects,
+  api,
   onRun,
   live,
   searchSignal,
@@ -1203,8 +1240,12 @@ function TestsView({
   onEdit,
   onManifestChange,
   onSave,
+  onTestCreated,
 }: {
   tests: ApiTest[];
+  runs: Run[];
+  projects: ApiProject[];
+  api: TestPilotApi | undefined;
   onRun: (test: ApiTest) => void;
   live: boolean;
   searchSignal: number;
@@ -1217,6 +1258,7 @@ function TestsView({
   onEdit: (test: ApiTest) => void;
   onManifestChange: (value: string) => void;
   onSave: () => void;
+  onTestCreated: (test: ApiTest) => void;
 }) {
   const { t, locale } = useLocale();
   const [query, setQuery] = useState("");
@@ -1224,6 +1266,36 @@ function TestsView({
   useEffect(() => {
     if (searchSignal > 0) searchRef.current?.focus();
   }, [searchSignal]);
+  const [newTestName, setNewTestName] = useState("");
+  const [creatingTest, setCreatingTest] = useState(false);
+  const [createStatus, setCreateStatus] = useState<string | undefined>();
+  const firstProject = projects[0];
+  const createTest = () => {
+    if (api === undefined || firstProject === undefined) return;
+    const trimmedName = newTestName.trim();
+    if (trimmedName === "") return;
+    const manifestId = slugifyTestName(trimmedName);
+    setCreatingTest(true);
+    setCreateStatus(undefined);
+    void api
+      .createTest(firstProject.id, trimmedName, manifestId, buildStarterManifest(manifestId, trimmedName) as unknown as ApiTestManifest)
+      .then((test) => {
+        onTestCreated(test);
+        setNewTestName("");
+        setCreateStatus(t("tests.createTestSuccess", { name: test.name }));
+      })
+      .catch(() => setCreateStatus(t("tests.createTestFailed")))
+      .finally(() => setCreatingTest(false));
+  };
+  const lastRunByTest = useMemo(() => {
+    const map = new Map<string, { latest: Run; count: number }>();
+    for (const run of runs) {
+      const existing = map.get(run.testId);
+      if (existing === undefined) map.set(run.testId, { latest: run, count: 1 });
+      else map.set(run.testId, { latest: existing.latest, count: existing.count + 1 });
+    }
+    return map;
+  }, [runs]);
   const normalizedQuery = query.trim().toLowerCase();
   const visibleTests =
     normalizedQuery === ""
@@ -1305,6 +1377,29 @@ function TestsView({
             </p>
           </div>
         </div>
+        <div className="new-test-form">
+          <input
+            value={newTestName}
+            onChange={(event) => setNewTestName(event.target.value)}
+            placeholder={t("tests.newTestNamePlaceholder")}
+            aria-label={t("tests.newTestTitle")}
+            disabled={!live || firstProject === undefined}
+          />
+          <button
+            className="text-button"
+            onClick={createTest}
+            disabled={!live || firstProject === undefined || creatingTest || newTestName.trim() === ""}
+          >
+            {creatingTest ? t("tests.creatingTest") : t("tests.createTest")}
+          </button>
+          {!live ? (
+            <span className="muted">{t("tests.createDemoHint")}</span>
+          ) : firstProject === undefined ? (
+            <span className="muted">{t("tests.createNoProjectHint")}</span>
+          ) : createStatus !== undefined ? (
+            <span className="connection-state live">{createStatus}</span>
+          ) : null}
+        </div>
         <div className="test-search">
           <input
             ref={searchRef}
@@ -1326,24 +1421,37 @@ function TestsView({
           <p className="filter-empty">{t("tests.noMatches", { query: query.trim() })}</p>
         ) : (
           <div className="live-list-body">
-            {visibleTests.map((test) => (
-              <div className="live-list-row" key={test.id}>
-                <div>
-                  <b>{test.name}</b>
-                  <span>
-                    {test.manifestId} · {test.id}
-                  </span>
+            {visibleTests.map((test) => {
+              const runStats = lastRunByTest.get(test.id);
+              return (
+                <div className="live-list-row" key={test.id}>
+                  <div>
+                    <b>{test.name}</b>
+                    <span>
+                      {test.manifestId} · {test.id}
+                    </span>
+                    <span className="test-run-status">
+                      {runStats !== undefined ? (
+                        <>
+                          <StatusPill status={runStats.latest.status} />
+                          <span className="muted">{t("tests.runsCount", { n: runStats.count })}</span>
+                        </>
+                      ) : (
+                        <span className="muted">{t("tests.noRunsYet")}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="row-actions">
+                    <button className="text-button" onClick={() => onEdit(test)}>
+                      {t("tests.edit")}
+                    </button>
+                    <button className="text-button" onClick={() => onRun(test)}>
+                      {t("tests.run")} →
+                    </button>
+                  </div>
                 </div>
-                <div className="row-actions">
-                  <button className="text-button" onClick={() => onEdit(test)}>
-                    {t("tests.edit")}
-                  </button>
-                  <button className="text-button" onClick={() => onRun(test)}>
-                    {t("tests.run")} →
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -1850,11 +1958,26 @@ function RunsView({
                 )}
               </div>
             ))}
-            {evidence.failures.map((failure, index) => (
-              <pre className="manifest-code" key={index}>
-                {JSON.stringify(failure, null, 2)}
-              </pre>
-            ))}
+            {evidence.failures.map((failure, index) => {
+              const message = typeof failure["message"] === "string" ? (failure["message"] as string) : JSON.stringify(failure);
+              const category = typeof failure["category"] === "string" ? (failure["category"] as string) : undefined;
+              const artifactIds = Array.isArray(failure["artifacts"]) ? (failure["artifacts"] as unknown[]) : undefined;
+              return (
+                <div className="failure-card" key={index}>
+                  <b>{message}</b>
+                  <div className="failure-meta">
+                    {category !== undefined && <span className="chip">{category}</span>}
+                    {artifactIds !== undefined && (
+                      <span className="muted">{t("overview.artifactsCount", { n: artifactIds.length })}</span>
+                    )}
+                  </div>
+                  <details className="failure-raw">
+                    <summary>{t("runs.showRawJson")}</summary>
+                    <pre className="manifest-code">{JSON.stringify(failure, null, 2)}</pre>
+                  </details>
+                </div>
+              );
+            })}
             {runResult !== undefined && (
             <div className="manifest-tree" aria-label={t("runs.resultsAria")}>
                 <b>{t("runs.stepsAndActions")}</b>
@@ -1862,14 +1985,24 @@ function RunsView({
                   <div className="live-list-row" key={step.stepId}>
                     <div>
                       <b>{step.stepId}</b>
-                      <span>
-                        {step.status} · {t("runs.actionsCount", { n: step.actions.length })}
-                      </span>
-                      {step.actions.map((action) => (
-                        <span key={action.actionId}>
-                          {action.actionId} · {action.type} · {action.status}
+                      <span className="step-status-line">
+                        <span className={`pill ${pillClassForResultStatus(step.status)}`}>
+                          <span className="dot" />
+                          {step.status}
                         </span>
-                      ))}
+                        <span className="muted">{t("runs.actionsCount", { n: step.actions.length })}</span>
+                      </span>
+                      <div className="step-actions">
+                        {step.actions.map((action) => (
+                          <span className="step-action" key={action.actionId}>
+                            <span className="muted">{action.actionId} · {action.type}</span>
+                            <span className={`pill ${pillClassForResultStatus(action.status)}`}>
+                              <span className="dot" />
+                              {action.status}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -2484,6 +2617,141 @@ function GitHubView({
     </div>
   );
 }
+function AiView({
+  changeRequests,
+  aiWorkers,
+  aiWorkerJobs,
+  live,
+  api,
+  onChangeRequestUpdated,
+}: {
+  changeRequests: ApiChangeRequest[];
+  aiWorkers: ApiAiWorker[];
+  aiWorkerJobs: ApiAiWorkerJob[];
+  live: boolean;
+  api: TestPilotApi | undefined;
+  onChangeRequestUpdated: (changeRequest: ApiChangeRequest) => void;
+}) {
+  const { t } = useLocale();
+  const [updatingId, setUpdatingId] = useState<string | undefined>();
+  const [message, setMessage] = useState<string | undefined>();
+  const updateStatus = (id: string, status: "approved" | "rejected") => {
+    if (api === undefined) return;
+    setUpdatingId(id);
+    setMessage(undefined);
+    void api
+      .updateChangeRequest(id, { status })
+      .then(onChangeRequestUpdated)
+      .catch(() => setMessage(status === "approved" ? t("ai.approveFailed") : t("ai.rejectFailed")))
+      .finally(() => setUpdatingId(undefined));
+  };
+  const heartbeating = aiWorkers.filter((worker) => worker.lastHeartbeatAt !== undefined).length;
+  return (
+    <div className="tests-layout ai-layout">
+      <section className="panel live-list">
+        <div className="panel-header">
+          <div>
+            <h2>{t("ai.proposalsTitle")}</h2>
+            <p>{live ? t("ai.proposalsSubtitle") : t("ai.subtitleDemo")}</p>
+          </div>
+          {message !== undefined && <span className="connection-state error">{message}</span>}
+        </div>
+        {changeRequests.length === 0 ? (
+          <div className="empty-state compact">
+            <p>{t("ai.noProposals")}</p>
+          </div>
+        ) : (
+          <div className="live-list-body">
+            {changeRequests.map((changeRequest) => (
+              <div className="live-list-row" key={changeRequest.id}>
+                <div>
+                  <b>{changeRequest.title}</b>
+                  <span>{changeRequest.description}</span>
+                  <span className="muted">{relativeTime(changeRequest.createdAt, t)}</span>
+                </div>
+                <div className="row-actions">
+                  <span
+                    className={`pill pill-${changeRequest.status === "open" ? "running" : changeRequest.status === "approved" ? "passed" : "failed"}`}
+                  >
+                    <span className="dot" />
+                    {changeRequest.status}
+                  </span>
+                  {live && changeRequest.status === "open" && (
+                    <>
+                      <button
+                        className="text-button"
+                        onClick={() => updateStatus(changeRequest.id, "approved")}
+                        disabled={updatingId === changeRequest.id}
+                      >
+                        {t("ai.approve")}
+                      </button>
+                      <button
+                        className="text-button"
+                        onClick={() => updateStatus(changeRequest.id, "rejected")}
+                        disabled={updatingId === changeRequest.id}
+                      >
+                        {t("ai.reject")}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="panel live-list">
+        <div className="panel-header">
+          <div>
+            <h2>{t("settings.aiWorkerJobs")}</h2>
+            <p>{t("settings.registeredHeartbeating", { n: aiWorkers.length, m: heartbeating })}</p>
+          </div>
+        </div>
+        <div className="live-list-body">
+          {aiWorkerJobs.length === 0 ? (
+            <p>{t("settings.noJobs")}</p>
+          ) : (
+            aiWorkerJobs.slice(0, 12).map((job) => (
+              <div className="live-list-row" key={job.id}>
+                <div>
+                  <b>{job.operation}</b>
+                  <span>{t("settings.attempt", { n: job.attempt })}</span>
+                </div>
+                <span
+                  className={`pill pill-${job.status === "completed" ? "passed" : job.status === "failed" || job.status === "cancelled" ? "failed" : "running"}`}
+                >
+                  <span className="dot" />
+                  {job.status}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+      <section className="panel live-list ai-connect-card">
+        <div className="panel-header">
+          <div>
+            <h2>{t("ai.connectTitle")}</h2>
+            <p>{t("ai.connectSubtitle")}</p>
+          </div>
+        </div>
+        <div className="live-list-body">
+          <p>{t("ai.connectDescription")}</p>
+          <pre className="manifest-code">
+            {"OPENTESTPILOT_URL=https://your-server\nOPENTESTPILOT_ORGANIZATION_ID=<org-id>\nOPENTESTPILOT_SESSION_TOKEN=<token>\ncommand: testpilot-mcp"}
+          </pre>
+          <b>{t("ai.capabilitiesTitle")}</b>
+          <ul className="ai-capabilities">
+            <li>{t("ai.capabilitySelect")}</li>
+            <li>{t("ai.capabilityValidate")}</li>
+            <li>{t("ai.capabilityRegister")}</li>
+            <li>{t("ai.capabilityPropose")}</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+  );
+}
 function SettingsView({
   projects,
   members,
@@ -2779,6 +3047,7 @@ function runForUi(run: ApiRun, tests: ApiTest[] = [], t: LocaleApi["t"] = (key, 
   return {
     id: run.id,
     test: tests.find((test) => test.id === run.testId)?.name ?? run.testId,
+    testId: run.testId,
     branch: "server",
     duration:
       run.startedAt === undefined || run.endedAt === undefined
@@ -2798,7 +3067,13 @@ function relativeTime(value: string, t: LocaleApi["t"] = (key, params) => transl
     0,
     Math.round((Date.now() - Date.parse(value)) / 1000),
   );
-  return seconds < 60 ? t("time.now") : t("time.minutesAgo", { n: Math.floor(seconds / 60) });
+  if (seconds < 60) return t("time.now");
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t("time.minutesAgo", { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("time.hoursAgo", { n: hours });
+  const days = Math.floor(hours / 24);
+  return t("time.daysAgo", { n: days });
 }
 
 function Root() {

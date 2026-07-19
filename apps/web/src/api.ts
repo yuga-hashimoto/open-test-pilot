@@ -59,6 +59,7 @@ export interface TestPilotApi {
   getRepositoryFile(repositoryId: string, path: string, ref?: string): Promise<ApiRepositoryFile['file']>;
   listPullRequests(repositoryId: string, state?: 'open' | 'closed' | 'all'): Promise<ApiPullRequestSummary[]>;
   createGitHubPullRequest(repositoryId: string, input: { title: string; head: string; base?: string; body?: string; draft?: boolean }): Promise<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>;
+  createTest(projectId: string, name: string, manifestId: string, manifest?: ApiTestManifest): Promise<ApiTest>;
   listChangeRequests(): Promise<ApiChangeRequest[]>;
   createChangeRequest(title: string, description?: string): Promise<ApiChangeRequest>;
   updateChangeRequest(id: string, patch: { status?: ApiChangeRequest['status']; description?: string }): Promise<ApiChangeRequest>;
@@ -150,6 +151,7 @@ export function createApi(config: ApiConfig, fetcher: typeof fetch = fetch): Tes
     async getRepositoryFile(repositoryId, path, ref) { return (await request<ApiRepositoryFile>(`/v1/repositories/${pathId(repositoryId)}/contents?path=${encodeURIComponent(path)}${ref === undefined ? '' : `&ref=${encodeURIComponent(ref)}`}`)).file; },
     async listPullRequests(repositoryId, state = 'open') { return (await request<{ repositoryId: string; state: string; pullRequests: ApiPullRequestSummary[] }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests?state=${encodeURIComponent(state)}`)).pullRequests; },
     async createGitHubPullRequest(repositoryId, input) { return await request<{ repositoryId: string; pullRequest: ApiPullRequest; local: { id: string; url: string } }>(`/v1/repositories/${pathId(repositoryId)}/pull-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
+    async createTest(projectId, name, manifestId, manifest) { return await request<ApiTest>(`/v1/organizations/${pathId(config.organizationId)}/tests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId, name, manifestId, ...(manifest === undefined ? {} : { manifest }) }) }); },
     async listChangeRequests() { return (await request<{ changeRequests: ApiChangeRequest[] }>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`)).changeRequests; },
     async createChangeRequest(title, description) { return await request<ApiChangeRequest>(`/v1/organizations/${pathId(config.organizationId)}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, ...(description === undefined ? {} : { description }) }) }); },
     async updateChangeRequest(id, patch) { return await request<ApiChangeRequest>(`/v1/change-requests/${pathId(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); },

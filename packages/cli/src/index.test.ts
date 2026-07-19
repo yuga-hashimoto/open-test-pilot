@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseManifest } from '@open-test-pilot/manifest-parser';
+import { SupportedActions } from '@open-test-pilot/manifest-schema';
 import { runCli } from './index.js';
 
 const manifest = `
@@ -176,5 +178,79 @@ describe('testpilot CLI', () => {
     expect(zip.toString('utf8')).toContain('manifest.yaml');
     expect(zip.toString('utf8')).toContain('package.json');
     expect(output.join('\n')).toContain(`exported: ${zipPath}`);
+  });
+
+  it.each(['web', 'api', 'mobile'] as const)('emits a schema-valid %s Manifest template to stdout', async (type) => {
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'template', '--type', type], output)).toBe(0);
+    expect(output).toHaveLength(1);
+    const yaml = output[0] ?? '';
+    const parsed = parseManifest(yaml, 'template.yaml');
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.manifest.type).toBe(type);
+  });
+
+  it('defaults the template type to web when --type is omitted', async () => {
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'template'], output)).toBe(0);
+    const parsed = parseManifest(output[0] ?? '', 'template.yaml');
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.manifest.type).toBe('web');
+  });
+
+  it('writes the template manifest to --output and reports the path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-template-'));
+    const templatePath = join(directory, 'nested', 'template.yaml');
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'template', '--type', 'api', '--id', 'my-api', '--name', 'My API', '--output', templatePath], output)).toBe(0);
+    expect(output).toEqual([`template: ${templatePath}`]);
+    const written = await readFile(templatePath, 'utf8');
+    const parsed = parseManifest(written, templatePath);
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.manifest.id).toBe('my-api');
+    expect(parsed.manifest.name).toBe('My API');
+  });
+
+  it('emits machine-readable JSON for manifest template', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-template-json-'));
+    const templatePath = join(directory, 'template.yaml');
+
+    const inlineOutput: string[] = [];
+    expect(await runCli(['manifest', 'template', '--type', 'mobile', '--json'], inlineOutput)).toBe(0);
+    const inline = JSON.parse(inlineOutput[0] ?? '') as { command: string; ok: boolean; type: string; yaml: string };
+    expect(inline).toMatchObject({ command: 'manifest.template', ok: true, type: 'mobile' });
+    expect(parseManifest(inline.yaml, 'template.yaml').diagnostics).toEqual([]);
+
+    const fileOutput: string[] = [];
+    expect(await runCli(['manifest', 'template', '--type', 'web', '--output', templatePath, '--json'], fileOutput)).toBe(0);
+    const withFile = JSON.parse(fileOutput[0] ?? '') as { command: string; ok: boolean; type: string; output: string };
+    expect(withFile).toEqual({ command: 'manifest.template', ok: true, type: 'web', output: templatePath });
+  });
+
+  it('rejects an unknown template type', async () => {
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'template', '--type', 'desktop'], output)).toBe(2);
+  });
+
+  it('lists every supported action with description and required fields', async () => {
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'actions'], output)).toBe(0);
+    expect(output).toHaveLength(SupportedActions.length);
+    expect(output.join('\n')).toContain('web.fill  selector, value  Fill an input');
+    expect(output.join('\n')).toContain('api.request  method, url');
+  });
+
+  it('emits the action list as JSON covering exactly the SupportedActions array', async () => {
+    const output: string[] = [];
+    expect(await runCli(['manifest', 'actions', '--json'], output)).toBe(0);
+    const parsed = JSON.parse(output[0] ?? '') as { command: string; ok: boolean; actions: Array<{ type: string; required: string[]; description: string }> };
+    expect(parsed.command).toBe('manifest.actions');
+    expect(parsed.ok).toBe(true);
+    expect(parsed.actions.map((action) => action.type)).toEqual([...SupportedActions]);
+    for (const action of parsed.actions) {
+      expect(typeof action.description).toBe('string');
+      expect(action.description.length).toBeGreaterThan(0);
+      expect(Array.isArray(action.required)).toBe(true);
+    }
   });
 });

@@ -1,19 +1,25 @@
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { createManifestValidator, SupportedActions } from '@open-test-pilot/manifest-schema';
+import { parse as parseYaml } from 'yaml';
 
 export interface PlatformClient {
   runStart(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   runStatus(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   organizationGet?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   projectGet?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  projectList?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   repositoryGet?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   testList?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  testCreate?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   testGet?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   testGetManifest?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   testGetGeneratedCode?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   changeRequestList?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   changeRequestGet?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  changeRequestCreate?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   changeRequestUpdate?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  runList?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   runGetFailures?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   runGetStep?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   runCompare?(input: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -41,15 +47,20 @@ const common = { organizationId: { type: 'string' } };
 const tools = [
   { name: 'organization_get', description: 'Get an organization', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
   { name: 'project_get', description: 'Get a project', inputSchema: { type: 'object', properties: { ...common, projectId: { type: 'string' } }, required: ['organizationId', 'projectId'] } },
+  { name: 'project_list', description: 'List projects in an organization; use to pick the projectId for test_create and run_start', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
   { name: 'repository_get', description: 'Get a repository integration', inputSchema: { type: 'object', properties: { ...common, repositoryId: { type: 'string' } }, required: ['organizationId', 'repositoryId'] } },
-  { name: 'test_list', description: 'List tests in an organization', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
+  { name: 'test_list', description: 'List tests in an organization; combine with run_list to find coverage gaps and unstable tests before selecting what to generate or repair', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
+  { name: 'test_create', description: 'Register a new AI-generated test. Pass the Manifest as YAML in manifestYaml; it is validated before the test is stored. Validate first with manifest_validate for faster iteration', inputSchema: { type: 'object', properties: { ...common, projectId: { type: 'string' }, name: { type: 'string' }, manifestId: { type: 'string' }, manifestYaml: { type: 'string', description: 'Full Manifest document as YAML' } }, required: ['organizationId', 'projectId', 'name', 'manifestId'] } },
+  { name: 'manifest_validate', description: 'Validate a Manifest YAML document locally against the OpenTestPilot schema without contacting the server. Returns {valid, errors, supportedActions} so an invalid document can be fixed before test_create', inputSchema: { type: 'object', properties: { manifestYaml: { type: 'string', description: 'Full Manifest document as YAML' } }, required: ['manifestYaml'] } },
   { name: 'test_get', description: 'Get test metadata', inputSchema: { type: 'object', properties: { ...common, testId: { type: 'string' } }, required: ['organizationId', 'testId'] } },
   { name: 'test_get_manifest', description: 'Get a test Manifest', inputSchema: { type: 'object', properties: { ...common, testId: { type: 'string' } }, required: ['organizationId', 'testId'] } },
   { name: 'test_get_generated_code', description: 'Get generated test code', inputSchema: { type: 'object', properties: { ...common, testId: { type: 'string' } }, required: ['organizationId', 'testId'] } },
   { name: 'change_request_list', description: 'List change requests', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
+  { name: 'change_request_create', description: 'Create a change request so a human can review an AI proposal (new tests, repairs, coverage plans) in the dashboard AI view', inputSchema: { type: 'object', properties: { ...common, title: { type: 'string' }, description: { type: 'string' } }, required: ['organizationId', 'title'] } },
   { name: 'change_request_get', description: 'Get a change request', inputSchema: { type: 'object', properties: { ...common, changeRequestId: { type: 'string' } }, required: ['organizationId', 'changeRequestId'] } },
   { name: 'change_request_update', description: 'Update a change request', inputSchema: { type: 'object', properties: { ...common, changeRequestId: { type: 'string' }, status: { type: 'string' } }, required: ['organizationId', 'changeRequestId', 'status'] } },
   { name: 'run_start', description: 'Start an asynchronous OpenTestPilot run', inputSchema: { type: 'object', properties: { ...common, projectId: { type: 'string' }, testId: { type: 'string' } }, required: ['organizationId', 'projectId', 'testId'] } },
+  { name: 'run_list', description: 'List runs in an organization; use recent failures and durations to prioritize which tests to select, repair, or extend', inputSchema: { type: 'object', properties: common, required: ['organizationId'] } },
   { name: 'run_get_status', description: 'Get asynchronous run status', inputSchema: { type: 'object', properties: { ...common, runId: { type: 'string' } }, required: ['organizationId', 'runId'] } },
   { name: 'run_get_failures', description: 'Get run failure summaries', inputSchema: { type: 'object', properties: { ...common, runId: { type: 'string' } }, required: ['organizationId', 'runId'] } },
   { name: 'run_get_step', description: 'Get a run step result', inputSchema: { type: 'object', properties: { ...common, runId: { type: 'string' }, stepId: { type: 'string' } }, required: ['organizationId', 'runId', 'stepId'] } },
@@ -62,6 +73,17 @@ const tools = [
 
 function textResult(value: Record<string, unknown>): { content: Array<{ type: 'text'; text: string }> } {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+export function validateManifestYaml(manifestYaml: string): Record<string, unknown> {
+  let document: unknown;
+  try {
+    document = parseYaml(manifestYaml);
+  } catch (error) {
+    return { valid: false, errors: [{ keyword: 'yaml', message: error instanceof Error ? error.message : String(error) }], supportedActions: SupportedActions };
+  }
+  const result = createManifestValidator()(document);
+  return { valid: result.valid, errors: result.errors ?? [], supportedActions: SupportedActions };
 }
 
 function paramsOf(request: McpRequest): Record<string, unknown> {
@@ -84,8 +106,9 @@ export async function handleMcpMessage(request: McpRequest, client: PlatformClie
         const missing = tool.inputSchema.required.filter((key) => typeof argumentsRecord[key] !== 'string' || String(argumentsRecord[key]).trim() === '');
         if (missing.length > 0) return { jsonrpc: '2.0', id: request.id, error: { code: -32602, message: `${name} requires: ${missing.join(', ')}` } };
       }
+      if (name === 'manifest_validate') return { jsonrpc: '2.0', id: request.id, result: textResult(validateManifestYaml(String(argumentsRecord['manifestYaml']))) };
       const methodByTool: Record<string, keyof PlatformClient> = {
-        organization_get: 'organizationGet', project_get: 'projectGet', repository_get: 'repositoryGet', test_list: 'testList', test_get: 'testGet', test_get_manifest: 'testGetManifest', test_get_generated_code: 'testGetGeneratedCode', change_request_list: 'changeRequestList', change_request_get: 'changeRequestGet', change_request_update: 'changeRequestUpdate', run_start: 'runStart', run_get_status: 'runStatus', run_get_failures: 'runGetFailures', run_get_step: 'runGetStep', run_compare: 'runCompare', artifact_get: 'artifactGet', repair_register: 'repairRegister', pull_request_register: 'pullRequestRegister', report_get_url: 'reportUrl',
+        organization_get: 'organizationGet', project_get: 'projectGet', project_list: 'projectList', repository_get: 'repositoryGet', test_list: 'testList', test_create: 'testCreate', test_get: 'testGet', test_get_manifest: 'testGetManifest', test_get_generated_code: 'testGetGeneratedCode', change_request_list: 'changeRequestList', change_request_get: 'changeRequestGet', change_request_create: 'changeRequestCreate', change_request_update: 'changeRequestUpdate', run_start: 'runStart', run_list: 'runList', run_get_status: 'runStatus', run_get_failures: 'runGetFailures', run_get_step: 'runGetStep', run_compare: 'runCompare', artifact_get: 'artifactGet', repair_register: 'repairRegister', pull_request_register: 'pullRequestRegister', report_get_url: 'reportUrl',
       };
       const method = methodByTool[name];
       if (method === undefined) return { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: `Unknown tool: ${name}` } };
@@ -112,13 +135,35 @@ export function createHttpClient(baseUrl: string, organizationId: string, sessio
   return {
     async organizationGet(input) { assertTenant(input); return await request(`/v1/organizations/${organizationId}`); },
     async projectGet(input) { assertTenant(input); return await request(`/v1/projects/${String(input['projectId'])}`); },
+    async projectList(input) { assertTenant(input); return await request(`/v1/organizations/${organizationId}/projects`); },
     async repositoryGet(input) { assertTenant(input); return await request(`/v1/repositories/${String(input['repositoryId'])}`); },
     async testList(input) { assertTenant(input); return await request(`/v1/organizations/${organizationId}/tests`); },
+    async testCreate(input) {
+      assertTenant(input);
+      const manifestYaml = input['manifestYaml'];
+      let manifest: unknown;
+      if (typeof manifestYaml === 'string' && manifestYaml.trim() !== '') {
+        try {
+          manifest = parseYaml(manifestYaml);
+        } catch (error) {
+          throw new Error(`manifestYaml is not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      const body: Record<string, unknown> = { projectId: input['projectId'], name: input['name'], manifestId: input['manifestId'] };
+      if (manifest !== undefined) body['manifest'] = manifest;
+      return await request(`/v1/organizations/${organizationId}/tests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    },
     async testGet(input) { assertTenant(input); return await request(`/v1/tests/${String(input['testId'])}`); },
     async testGetManifest(input) { assertTenant(input); return await request(`/v1/tests/${String(input['testId'])}/manifest`); },
     async testGetGeneratedCode(input) { assertTenant(input); return await request(`/v1/tests/${String(input['testId'])}/generated-code`); },
     async changeRequestList(input) { assertTenant(input); return await request(`/v1/organizations/${organizationId}/change-requests`); },
     async changeRequestGet(input) { assertTenant(input); return await request(`/v1/change-requests/${String(input['changeRequestId'])}`); },
+    async changeRequestCreate(input) {
+      assertTenant(input);
+      const body: Record<string, unknown> = { title: input['title'] };
+      if (typeof input['description'] === 'string') body['description'] = input['description'];
+      return await request(`/v1/organizations/${organizationId}/change-requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    },
     async changeRequestUpdate(input) { assertTenant(input); return await request(`/v1/change-requests/${String(input['changeRequestId'])}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }); },
     async runStart(input) {
       assertTenant(input);
@@ -128,6 +173,7 @@ export function createHttpClient(baseUrl: string, organizationId: string, sessio
       assertTenant(input);
       return await request(`/v1/runs/${String(input['runId'])}`);
     },
+    async runList(input) { assertTenant(input); return await request(`/v1/organizations/${organizationId}/runs`); },
     async runGetFailures(input) { assertTenant(input); return await request(`/v1/runs/${String(input['runId'])}/failures`); },
     async runGetStep(input) { assertTenant(input); return await request(`/v1/runs/${String(input['runId'])}/steps/${String(input['stepId'])}`); },
     async runCompare(input) { assertTenant(input); return await request(`/v1/runs/${String(input['runId'])}/compare/${String(input['baselineRunId'])}`); },

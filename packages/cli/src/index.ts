@@ -9,6 +9,7 @@ import { runLocal } from '@open-test-pilot/local-runner';
 import type { CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
 import { diffManifests, migrateManifest, previewMigration } from '@open-test-pilot/manifest-migrator';
 import { parseManifest } from '@open-test-pilot/manifest-parser';
+import { SupportedActions, type Manifest, type ManifestActionType } from '@open-test-pilot/manifest-schema';
 import { renderReport } from '@open-test-pilot/report';
 import type { TestRunResult } from '@open-test-pilot/result-schema';
 import { generateManifestFromSource, type ManifestGenerationOptions } from '@open-test-pilot/source-analyzer';
@@ -24,6 +25,8 @@ Commands:
   testpilot manifest migrate <file> [--approve]    Preview or apply a Manifest migration
   testpilot manifest diff <before> <after>         Compare two Manifests
   testpilot manifest export <file> --output <path> Export a standalone project
+  testpilot manifest template [options]            Emit a starter Manifest YAML
+  testpilot manifest actions                       List supported action types and required fields
   testpilot source analyze <source> [options]      Analyze source into a Manifest
   testpilot import openapi <file> [options]        Import OpenAPI 3.0/3.1 into a Manifest
   testpilot import postman <file> [options]        Import Postman Collection v2.1 into a Manifest
@@ -40,6 +43,104 @@ const RUN_HELP = `Usage: testpilot run <manifest> [--actions <module>] [--json]
 Executes a validated Manifest with the local runner and writes a report.
 With --json, prints a single JSON object with runId, status, and report paths.`;
 
+const ACTION_METADATA: Record<ManifestActionType, { required: string[]; description: string }> = {
+  'web.goto': { required: ['url'], description: 'Navigate the browser to a URL' },
+  'web.fill': { required: ['selector', 'value'], description: 'Fill an input' },
+  'web.click': { required: ['selector'], description: 'Click an element' },
+  'web.expectVisible': { required: ['selector'], description: 'Assert an element is visible' },
+  'web.expectText': { required: ['selector', 'expectedText'], description: 'Assert an element contains text' },
+  'web.screenshot': { required: [], description: 'Capture a screenshot' },
+  'api.request': { required: ['method', 'url'], description: 'Send an HTTP request and assert the response' },
+  'mobile.launch': { required: ['capabilities'], description: 'Launch the mobile app under the given device capabilities' },
+  'mobile.tap': { required: ['selector'], description: 'Tap an element' },
+  'mobile.fill': { required: ['selector', 'value'], description: 'Fill an input' },
+  'mobile.expectVisible': { required: ['selector'], description: 'Assert an element is visible' },
+  'mobile.expectText': { required: ['selector', 'expectedText'], description: 'Assert an element contains text' },
+  'mobile.screenshot': { required: [], description: 'Capture a screenshot' },
+  'mobile.back': { required: [], description: 'Navigate back' },
+  'control.if': { required: ['condition', 'children'], description: 'Run children when a condition is true' },
+  'control.switch': { required: ['value', 'cases'], description: 'Branch on a value across named cases' },
+  'control.for': { required: ['variable', 'from', 'to', 'children'], description: 'Run children in a counted loop' },
+  'control.forEach': { required: ['items', 'variable', 'children'], description: 'Run children once per item in a collection' },
+  'control.while': { required: ['condition', 'maxAttempts', 'children'], description: 'Run children while a condition is true' },
+  'control.retry': { required: ['maxAttempts', 'children'], description: 'Retry children up to a maximum number of attempts' },
+  'control.try': { required: ['children'], description: 'Run children with catch/finally handling' },
+  'control.parallel': { required: ['branches'], description: 'Run branches concurrently and wait for all' },
+  'control.race': { required: ['branches'], description: 'Run branches concurrently and take the first to finish' },
+  'control.waitUntil': { required: ['condition', 'maxAttempts', 'pollMs', 'children'], description: 'Poll until a condition is true' },
+  'control.break': { required: [], description: 'Break out of the enclosing loop' },
+  'control.continue': { required: [], description: 'Continue to the next loop iteration' },
+  'control.return': { required: [], description: 'Return from the enclosing function' },
+  'control.set': { required: ['variable', 'value'], description: 'Set a variable' },
+  'control.call': { required: ['functionName'], description: 'Call a defined function' },
+  'control.timeout': { required: ['timeoutMs', 'children'], description: 'Run children with a timeout' },
+  'custom.action': { required: ['actionType'], description: 'Invoke a custom action executor' },
+};
+
+type ManifestTemplateType = 'web' | 'api' | 'mobile';
+
+function buildManifestTemplate(type: ManifestTemplateType, id: string, name: string): Manifest {
+  const base: Manifest = {
+    schemaVersion: '1.0.0',
+    id,
+    name,
+    description: `Starter ${type} Manifest generated by testpilot manifest template`,
+    type,
+    tags: ['starter'],
+    priority: 'medium',
+    preconditions: [],
+    variables: [],
+    secrets: [],
+    setup: [],
+    steps: [],
+    cleanup: [],
+    artifacts: { screenshots: 'after' },
+    runner: { minBrowsers: type === 'web' ? ['chromium'] : [] },
+    permissions: { networkAccess: true },
+    source: { repository: 'local', path: `manifests/${id}.yaml` },
+    generatedCode: { path: `generated/${id}.spec.ts` },
+  };
+  if (type === 'api') {
+    base.steps = [
+      {
+        id: 'main',
+        description: 'Call the API and assert the response',
+        actions: [
+          { id: 'request', type: 'api.request', method: 'GET', url: 'http://127.0.0.1:4174/health', expectedStatus: 200 },
+        ],
+      },
+    ];
+    return base;
+  }
+  if (type === 'mobile') {
+    base.steps = [
+      {
+        id: 'main',
+        description: 'Launch the app and assert a screen element',
+        actions: [
+          { id: 'launch', type: 'mobile.launch', capabilities: { platform: 'android', deviceName: 'emulator-5554' } },
+          { id: 'tap-button', type: 'mobile.tap', selector: '~example-button' },
+          { id: 'expect-result', type: 'mobile.expectVisible', selector: '~example-result' },
+        ],
+      },
+    ];
+    return base;
+  }
+  base.steps = [
+    {
+      id: 'main',
+      description: 'Fill and submit a form, then assert the result',
+      actions: [
+        { id: 'goto', type: 'web.goto', url: 'http://127.0.0.1:4173/' },
+        { id: 'fill-input', type: 'web.fill', selector: '[data-testid=example-input]', value: 'example value' },
+        { id: 'click-submit', type: 'web.click', selector: '[data-testid=example-submit]' },
+        { id: 'expect-result', type: 'web.expectVisible', selector: '[data-testid=example-result]' },
+      ],
+    },
+  ];
+  return base;
+}
+
 function writeHelp(args: string[], output: string[]): number | undefined {
   const first = args[0];
   if (first === '--version' || first === '-v') {
@@ -55,7 +156,7 @@ function writeHelp(args: string[], output: string[]): number | undefined {
     return 0;
   }
   if (first === 'manifest' && (args[1] === '--help' || args[1] === '-h')) {
-    output.push(`${HELP}\n\nManifest commands accept --help for this overview.`);
+    output.push(`${HELP}\n\nManifest commands accept --help for this overview.\nmanifest template options: --type web|api|mobile, --id, --name, --output, --json`);
     return 0;
   }
   if (first === 'source' && (args[1] === '--help' || args[1] === '-h')) {
@@ -219,6 +320,46 @@ export async function runCli(rawArgs: string[], output: string[] = []): Promise<
     }
     await exportManifestProject(input, resolve(destination));
     output.push(`exported: ${resolve(destination)}`);
+    return 0;
+  }
+
+  if (group === 'manifest' && command === 'template') {
+    const templateArgs = args.slice(2);
+    const flags = new Map<string, string>();
+    for (let index = 0; index < templateArgs.length; index += 1) {
+      const flag = templateArgs[index];
+      const value = templateArgs[index + 1];
+      if (flag?.startsWith('--') && value !== undefined && !value.startsWith('--')) flags.set(flag.slice(2), value);
+    }
+    const requestedType = flags.get('type') ?? 'web';
+    if (requestedType !== 'web' && requestedType !== 'api' && requestedType !== 'mobile') {
+      output.push('manifest template --type must be one of web, api, mobile');
+      return 2;
+    }
+    const type = requestedType as ManifestTemplateType;
+    const id = flags.get('id') ?? `${type}-template`;
+    const name = flags.get('name') ?? `${type[0]?.toUpperCase()}${type.slice(1)} template`;
+    const manifest = buildManifestTemplate(type, id, name);
+    const yamlText = stringifyYaml(manifest);
+    const outputPath = flags.get('output');
+    if (outputPath !== undefined) {
+      const destination = resolve(outputPath);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, yamlText, 'utf8');
+      output.push(json ? JSON.stringify({ command: 'manifest.template', ok: true, type, output: destination }) : `template: ${destination}`);
+      return 0;
+    }
+    output.push(json ? JSON.stringify({ command: 'manifest.template', ok: true, type, yaml: yamlText }) : yamlText);
+    return 0;
+  }
+
+  if (group === 'manifest' && command === 'actions') {
+    const actions = SupportedActions.map((type) => ({ type, required: ACTION_METADATA[type].required, description: ACTION_METADATA[type].description }));
+    if (json) {
+      output.push(JSON.stringify({ command: 'manifest.actions', ok: true, actions }));
+      return 0;
+    }
+    actions.forEach((action) => output.push(`${action.type}  ${action.required.length > 0 ? action.required.join(', ') : 'none'}  ${action.description}`));
     return 0;
   }
 

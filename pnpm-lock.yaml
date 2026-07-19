@@ -208,6 +208,9 @@ importers:
       '@open-test-pilot/manifest-parser':
         specifier: workspace:*
         version: link:../manifest-parser
+      '@open-test-pilot/manifest-schema':
+        specifier: workspace:*
+        version: link:../manifest-schema
       '@open-test-pilot/playwright-adapter':
         specifier: workspace:*
         version: link:../playwright-adapter
@@ -294,7 +297,14 @@ importers:
         specifier: ^8.17.0
         version: 8.20.0
 
-  packages/mcp-server: {}
+  packages/mcp-server:
+    dependencies:
+      '@open-test-pilot/manifest-schema':
+        specifier: workspace:*
+        version: link:../manifest-schema
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
 
   packages/notification-adapter:
     dependencies:
