@@ -164,6 +164,21 @@ describe('web API client', () => {
     expect(calls.find((call) => call.url.endsWith('/rotate'))?.init?.body).toContain('rotated-value');
   });
 
+  it('creates a test from a project, name, manifest id, and optional manifest', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input, init) => {
+      calls.push({ url: String(input), ...(init === undefined ? {} : { init }) });
+      return new Response(JSON.stringify({ id: 'test-1', projectId: 'project-1', name: 'Checkout flow', manifestId: 'checkout-flow', createdAt: new Date().toISOString() }), { status: 201 });
+    });
+    await expect(api.createTest('project-1', 'Checkout flow', 'checkout-flow', { schemaVersion: '1.0.0', id: 'checkout-flow' })).resolves.toMatchObject({ id: 'test-1', manifestId: 'checkout-flow' });
+    expect(calls[0]?.url).toBe('https://pilot.test/v1/organizations/org-1/tests');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(calls[0]?.init?.headers).toMatchObject({ 'x-organization-id': 'org-1', 'content-type': 'application/json' });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ projectId: 'project-1', name: 'Checkout flow', manifestId: 'checkout-flow', manifest: { schemaVersion: '1.0.0', id: 'checkout-flow' } });
+    await api.createTest('project-1', 'No manifest test', 'no-manifest-test');
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ projectId: 'project-1', name: 'No manifest test', manifestId: 'no-manifest-test' });
+  });
+
   it('cancels a queued run through the job endpoint', async () => {
     let requested = '';
     const api = createApi({ baseUrl: 'https://pilot.test', organizationId: 'org-1' }, async (input) => { requested = String(input); return new Response(JSON.stringify({ runId: 'run-1', status: 'cancelled' }), { status: 200 }); });

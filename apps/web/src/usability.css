@@ -67,7 +67,11 @@ footer {
 .graph-node b,
 .graph-node small,
 .login-card p,
-.empty-state p {
+.empty-state p,
+.chip,
+.failure-card b,
+.failure-raw summary,
+.ai-capabilities li {
   font-size: 12px;
 }
 
@@ -206,7 +210,8 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .tests-layout {
+  .tests-layout,
+  .ai-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -330,7 +335,8 @@ footer {
   .content-grid,
   .bottom-grid,
   .tests-layout,
-  .settings-grid {
+  .settings-grid,
+  .ai-layout {
     grid-template-columns: 1fr;
   }
 
