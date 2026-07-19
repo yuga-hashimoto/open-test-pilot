@@ -96,6 +96,13 @@ export interface ManifestAction {
   body?: unknown;
   expectedStatus?: number | number[];
   jsonAssertions?: Record<string, unknown>;
+  query?: Record<string, string>;
+  pathParams?: Record<string, string>;
+  contentType?: string;
+  assertHeaders?: Record<string, string>;
+  responseSchema?: Record<string, unknown>;
+  capture?: 'none' | 'on-failure' | 'always';
+  allowedHosts?: string[];
   condition?: string;
   items?: string | unknown[];
   variable?: string;
@@ -368,6 +375,13 @@ export const manifestJsonSchema = {
         body: {},
         expectedStatus: { anyOf: [{ type: 'integer' }, { type: 'array', items: { type: 'integer' } }] },
         jsonAssertions: { type: 'object' },
+        query: { type: 'object', additionalProperties: { type: 'string' } },
+        pathParams: { type: 'object', additionalProperties: { type: 'string' } },
+        contentType: { type: 'string' },
+        assertHeaders: { type: 'object', additionalProperties: { type: 'string' } },
+        responseSchema: { type: 'object' },
+        capture: { enum: ['none', 'on-failure', 'always'] },
+        allowedHosts: { type: 'array', items: { type: 'string' } },
         condition: { type: 'string' },
         items: {},
         variable: { type: 'string' },

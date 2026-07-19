@@ -156,7 +156,11 @@ importers:
         specifier: workspace:*
         version: link:../result-schema
 
-  packages/api-adapter: {}
+  packages/api-adapter:
+    dependencies:
+      ajv:
+        specifier: ^8.17.0
+        version: 8.20.0
 
   packages/appium-adapter:
     dependencies:

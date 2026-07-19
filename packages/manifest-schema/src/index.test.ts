@@ -205,6 +205,32 @@ describe('Manifest Schema', () => {
       expect(action.body).toBeDefined();
     });
 
+    it('supports optional api.request fields without breaking schemaVersion 1.0.0', () => {
+      const action: ManifestAction = {
+        id: 'act-api-full',
+        type: 'api.request',
+        method: 'GET',
+        url: '${env.API_URL}/users/{id}',
+        query: { page: '1', active: 'true' },
+        pathParams: { id: '42' },
+        contentType: 'application/json',
+        assertHeaders: { 'x-request-id': 'abc' },
+        responseSchema: { type: 'object', required: ['email'], properties: { email: { type: 'string' } } },
+        timeoutMs: 5000,
+        capture: 'on-failure',
+        allowedHosts: ['api.example.com'],
+        expectedStatus: 200,
+        jsonAssertions: { '$.email': 'a@test.com' },
+      };
+      expect(action.query?.['page']).toBe('1');
+      expect(action.pathParams?.['id']).toBe('42');
+      expect(action.contentType).toBe('application/json');
+      expect(action.assertHeaders?.['x-request-id']).toBe('abc');
+      expect(action.responseSchema).toBeDefined();
+      expect(action.capture).toBe('on-failure');
+      expect(action.allowedHosts).toEqual(['api.example.com']);
+    });
+
     it('supports expression interpolation in step outputs', () => {
       const step: ManifestStep = {
         id: 'login',
@@ -363,6 +389,50 @@ describe('Manifest Schema', () => {
           { id: 'retry', type: 'control.retry', maxAttempts: 1001, children: [] },
           { id: 'parallel', type: 'control.parallel', branches: [] },
         ] }],
+      };
+      expect(validator(invalid).valid).toBe(false);
+    });
+
+    it('accepts optional api.request fields on schemaVersion 1.0.0 manifests', () => {
+      const apiManifest = {
+        ...validManifest,
+        steps: [{
+          id: 'api',
+          actions: [{
+            id: 'get-user',
+            type: 'api.request',
+            method: 'GET',
+            url: 'https://api.example.com/users/{id}',
+            query: { page: '1' },
+            pathParams: { id: '42' },
+            contentType: 'application/json',
+            headers: { authorization: 'Bearer ${secret:TOKEN}' },
+            expectedStatus: [200, 201],
+            jsonAssertions: { '$.ok': true },
+            assertHeaders: { 'content-type': 'application/json' },
+            responseSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+            timeoutMs: 3000,
+            capture: 'always',
+            allowedHosts: ['api.example.com'],
+          }],
+        }],
+      };
+      expect(validator(apiManifest)).toMatchObject({ valid: true, errors: null });
+    });
+
+    it('rejects invalid api.request capture mode', () => {
+      const invalid = {
+        ...validManifest,
+        steps: [{
+          id: 'api',
+          actions: [{
+            id: 'bad-capture',
+            type: 'api.request',
+            method: 'GET',
+            url: 'https://api.example.com/ok',
+            capture: 'sometimes',
+          }],
+        }],
       };
       expect(validator(invalid).valid).toBe(false);
     });
