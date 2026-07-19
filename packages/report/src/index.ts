@@ -22,7 +22,10 @@ function renderAction(action: ActionResult, artifacts: Artifact[]): string {
     .filter((artifact): artifact is Artifact => artifact !== undefined)
     .map((artifact) => `<a href="${escapeHtml(artifact.path)}">${escapeHtml(artifact.type)}</a>`)
     .join(' ');
-  return `<li class="action ${escapeHtml(action.status)}"><code>${escapeHtml(action.actionId)}</code> <span>${escapeHtml(action.type)}</span>${error}${links.length > 0 ? `<div class="artifacts">${links}</div>` : ''}</li>`;
+  const exchange = action.httpExchange === undefined
+    ? ''
+    : `<div class="http-exchange"><code>${escapeHtml(action.httpExchange.method)} ${escapeHtml(action.httpExchange.url)}</code> → <strong>${action.httpExchange.responseStatus}</strong> (${action.httpExchange.durationMs} ms)</div>`;
+  return `<li class="action ${escapeHtml(action.status)}"><code>${escapeHtml(action.actionId)}</code> <span>${escapeHtml(action.type)}</span>${exchange}${error}${links.length > 0 ? `<div class="artifacts">${links}</div>` : ''}</li>`;
 }
 
 function renderStep(step: StepResult, artifacts: Artifact[]): string {

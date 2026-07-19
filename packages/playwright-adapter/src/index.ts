@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { chromium, request as playwrightRequest, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 import { executeApiAction, type ApiAction, type ApiTransport } from '@open-test-pilot/api-adapter';
 import type { Manifest, ManifestAction } from '@open-test-pilot/manifest-schema';
-import { redactSecrets, type ActionResult, type Artifact, type FailureCategory, type StepResult, type TestRunResult } from '@open-test-pilot/result-schema';
+import { redactSecrets, type ActionResult, type Artifact, type FailureCategory, type HttpExchange, type StepResult, type TestRunResult } from '@open-test-pilot/result-schema';
 
 export interface ExecuteManifestOptions {
   outputDir: string;
@@ -29,6 +29,7 @@ interface ExecutionContext {
   variables: Record<string, unknown>;
   stepOutputs: Record<string, unknown>;
   secrets: Record<string, string>;
+  apiExchanges: Record<string, HttpExchange>;
   writeArtifact(name: string, body: Uint8Array, contentType: string): Promise<string>;
   recordArtifact(type: string, relativePath: string): string;
 }
@@ -229,6 +230,18 @@ async function executeAction(action: ManifestAction, manifest: Manifest, page: P
       const transport = options.apiTransport ?? (request === undefined ? undefined : createPlaywrightApiTransport(request));
       if (transport === undefined) throw new Error('API request requires an HTTP transport');
       const result = await executeApiAction(resolvedAction, { transport });
+      if (action.capture !== 'none') {
+        context.apiExchanges[action.id] = {
+          method: resolvedAction.method,
+          url: result.request.url,
+          ...(result.request.headers === undefined ? {} : { requestHeaders: result.request.headers }),
+          ...(result.request.body === undefined ? {} : { requestBody: result.request.body }),
+          responseStatus: result.status,
+          responseHeaders: result.headers,
+          responseBody: result.body,
+          durationMs: result.durationMs,
+        };
+      }
       if (action.outputs !== undefined) {
         const output = Object.fromEntries(Object.entries(action.outputs).map(([key, path]) => [key, readObjectPath(result.body, path)]));
         context.stepOutputs[action.id] = { response: { status: result.status, headers: result.headers, body: result.body }, ...output };
@@ -414,6 +427,7 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
     variables: {},
     stepOutputs: {},
     secrets: await resolveManifestSecrets(manifest, options.secretProviders),
+    apiExchanges: {},
     writeArtifact: async (name, body, contentType) => {
       const relativePath = name.replaceAll('\\', '/').replace(/^\/+/, '');
       if (relativePath.split('/').includes('..')) throw new Error('custom artifact path must stay within the run directory');
@@ -462,7 +476,7 @@ export async function executeManifest(manifest: Manifest, options: ExecuteManife
           if (screenshotMode === 'before-and-after') {
             actionArtifacts.push(...await capturePage(artifacts, page, options.outputDir, 'screenshot', `${step.id}-${action.id}-after`));
           }
-          actionResults.push({ actionId: action.id, type: action.type, status: 'passed', startedAt: actionStartedAt, endedAt: now(), ...(actionArtifacts.length > 0 ? { artifacts: actionArtifacts } : {}) });
+          actionResults.push({ actionId: action.id, type: action.type, status: 'passed', startedAt: actionStartedAt, endedAt: now(), ...(actionArtifacts.length > 0 ? { artifacts: actionArtifacts } : {}), ...(executionContext.apiExchanges[action.id] === undefined ? {} : { httpExchange: executionContext.apiExchanges[action.id] }) });
         } catch (error) {
           stepFailed = true;
           const message = error instanceof Error ? error.message : String(error);

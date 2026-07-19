@@ -70,6 +70,17 @@ export interface ActionError {
   stack?: string;
 }
 
+export interface HttpExchange {
+  method: string;
+  url: string;
+  requestHeaders?: Record<string, string>;
+  requestBody?: unknown;
+  responseStatus: number;
+  responseHeaders: Record<string, string>;
+  responseBody?: unknown;
+  durationMs: number;
+}
+
 export interface ActionResult {
   actionId: string;
   type: string;
@@ -78,6 +89,7 @@ export interface ActionResult {
   endedAt: string;
   error?: ActionError;
   artifacts?: string[];
+  httpExchange?: HttpExchange;
 }
 
 export interface StepResult {

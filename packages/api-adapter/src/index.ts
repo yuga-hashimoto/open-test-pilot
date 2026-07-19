@@ -25,6 +25,7 @@ export interface ApiResult {
   headers: Record<string, string>;
   body: unknown;
   durationMs: number;
+  request: { method: string; url: string; headers?: Record<string, string>; body?: string };
   capture?: ApiCaptureMode;
 }
 
@@ -191,6 +192,7 @@ export async function executeApiAction(
     headers: responseHeaders,
     body: responseBody,
     durationMs,
+    request: { method: action.method, url: resolvedUrl, ...(headers === undefined ? {} : { headers }), ...(body === undefined ? {} : { body }) },
     ...(action.capture === undefined ? {} : { capture: action.capture }),
   };
 }

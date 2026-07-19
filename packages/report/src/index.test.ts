@@ -33,4 +33,13 @@ describe('renderReport', () => {
     expect(html).toContain('&lt;unsafe&gt;');
     expect(html).not.toContain('<unsafe>');
   });
+
+  it('renders HTTP exchange evidence without exposing request body values in the summary', () => {
+    const html = renderReport({
+      runId: 'run-api', testId: 'api-test', manifestId: 'api-test', status: 'passed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z',
+      metadata: { browser: 'none', browserVersion: 'unknown', viewport: { width: 0, height: 0 } }, steps: [{ stepId: 'api', status: 'passed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', actions: [{ actionId: 'request', type: 'api.request', status: 'passed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', httpExchange: { method: 'GET', url: 'https://api.example.test/health', responseStatus: 200, responseHeaders: {}, responseBody: { ok: true }, durationMs: 4 } }] }], artifacts: [],
+    });
+    expect(html).toContain('GET https://api.example.test/health');
+    expect(html).toContain('200');
+  });
 });

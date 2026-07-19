@@ -11,6 +11,7 @@ import {
   type RunStatus,
   type StepResult,
   type TestRunResult,
+  type HttpExchange,
   validateTestRunResult,
   redactSecrets,
 } from './index.js';
@@ -74,6 +75,20 @@ describe('Result Protocol', () => {
   });
 
   describe('ActionResult', () => {
+    it('supports structured HTTP exchange evidence', () => {
+      const exchange: HttpExchange = {
+        method: 'GET',
+        url: 'https://api.example.test/users/1',
+        requestHeaders: { authorization: '[REDACTED]' },
+        responseStatus: 200,
+        responseHeaders: { 'content-type': 'application/json' },
+        responseBody: { id: 1 },
+        durationMs: 12,
+      };
+      const result: ActionResult = { actionId: 'api', type: 'api.request', status: 'passed', startedAt: '2026-07-16T00:00:00.000Z', endedAt: '2026-07-16T00:00:01.000Z', httpExchange: exchange };
+      expect(result.httpExchange?.responseStatus).toBe(200);
+    });
+
     it('contains action ID, status, timing, and optional error', () => {
       const result: ActionResult = {
         actionId: 'act-login',
