@@ -162,6 +162,15 @@ importers:
         specifier: ^8.17.0
         version: 8.20.0
 
+  packages/api-importer:
+    dependencies:
+      '@open-test-pilot/manifest-schema':
+        specifier: workspace:*
+        version: link:../manifest-schema
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
+
   packages/appium-adapter:
     dependencies:
       appium:
@@ -184,6 +193,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@open-test-pilot/api-importer':
+        specifier: workspace:*
+        version: link:../api-importer
       '@open-test-pilot/generator':
         specifier: workspace:*
         version: link:../generator

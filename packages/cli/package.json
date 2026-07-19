@@ -14,6 +14,7 @@
     "build": "tsc --build && cp src/launcher.mjs dist/launcher.mjs"
   },
   "dependencies": {
+    "@open-test-pilot/api-importer": "workspace:*",
     "@open-test-pilot/generator": "workspace:*",
     "@open-test-pilot/local-runner": "workspace:*",
     "@open-test-pilot/manifest-migrator": "workspace:*",
