@@ -52,6 +52,17 @@ describe('executeManifest', () => {
     }
   });
 
+  it('classifies API response schema drift as a specification mismatch', async () => {
+    const result = await executeManifest({
+      ...manifest,
+      id: 'api-schema-drift',
+      type: 'api',
+      steps: [{ id: 'api', actions: [{ id: 'health', type: 'api.request', method: 'GET', url: 'https://api.example.test/health', responseSchema: { type: 'object', required: ['ok'] } }] }],
+    }, { outputDir: '.testpilot/api-schema-drift', screenshotMode: 'none', apiTransport: { async request() { return { status: 200, headers: { 'content-type': 'application/json' }, body: { error: true }, durationMs: 1 }; } } });
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]?.actions[0]?.error?.category).toBe('SPECIFICATION_MISMATCH');
+  });
+
   it('returns a structured failed result when the target is unavailable', async () => {
     const result = await executeManifest(manifest, { outputDir: '.testpilot/test-adapter' });
     expect(result.status).toBe('failed');

@@ -96,6 +96,9 @@ function classifyError(error: unknown): FailureCategory {
   if (/net::|fetch|socket|ECONNRESET|ENOTFOUND/i.test(message)) {
     return 'NETWORK_ERROR';
   }
+  if (/API (?:response )?schema assertion|contract assertion|specification mismatch/i.test(message)) {
+    return 'SPECIFICATION_MISMATCH';
+  }
   if (/locator|waiting for|to be visible|to have text/i.test(message)) {
     return 'LOCATOR_CHANGED';
   }

@@ -1226,6 +1226,22 @@ function TestsView({
     if (parsed === undefined) return;
     onManifestChange(stringifyYaml({ ...parsed, [field]: value }));
   };
+  const apiActions = Array.isArray(parsed?.["steps"])
+    ? (parsed["steps"] as Array<Record<string, unknown>>).flatMap((step) => Array.isArray(step["actions"]) ? step["actions"] as Array<Record<string, unknown>> : []).filter((action) => action["type"] === "api.request")
+    : [];
+  const firstApiAction = apiActions[0];
+  const updateFirstApiAction = (patch: Record<string, unknown>) => {
+    if (parsed === undefined || firstApiAction === undefined || !Array.isArray(parsed["steps"])) return;
+    let updated = false;
+    const steps = (parsed["steps"] as Array<Record<string, unknown>>).map((step) => ({
+      ...step,
+      ["actions"]: Array.isArray(step["actions"]) ? (step["actions"] as Array<Record<string, unknown>>).map((action) => {
+        if (!updated && action["type"] === "api.request") { updated = true; return { ...action, ...patch }; }
+        return action;
+      }) : step["actions"],
+    }));
+    onManifestChange(stringifyYaml({ ...parsed, steps }));
+  };
   const customCode = Array.isArray(parsed?.["customCode"])
     ? parsed["customCode"]
     : [];
@@ -1351,6 +1367,27 @@ function TestsView({
                   }
                 />
               </label>
+              {firstApiAction !== undefined && (
+                <fieldset className="editor-api-fields">
+                  <legend>API request</legend>
+                  <label>
+                    Method
+                    <input value={String(firstApiAction["method"] ?? "GET")} onChange={(event) => updateFirstApiAction({ method: event.target.value.toUpperCase() })} />
+                  </label>
+                  <label>
+                    URL
+                    <input value={String(firstApiAction["url"] ?? "")} onChange={(event) => updateFirstApiAction({ url: event.target.value })} />
+                  </label>
+                  <label>
+                    Expected status
+                    <input type="number" value={String(firstApiAction["expectedStatus"] ?? 200)} onChange={(event) => updateFirstApiAction({ expectedStatus: Number(event.target.value) })} />
+                  </label>
+                  <label>
+                    Response JSON Schema
+                    <textarea value={JSON.stringify(firstApiAction["responseSchema"] ?? {}, null, 2)} onChange={(event) => { try { updateFirstApiAction({ responseSchema: JSON.parse(event.target.value) }); } catch { /* keep the last valid schema until JSON is complete */ } }} />
+                  </label>
+                </fieldset>
+              )}
             </div>
           ) : view === "tree" ? (
             <div className="manifest-tree" aria-label={t("tests.manifestTree")}>
