@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Editor } from "@monaco-editor/react";
 import { generatePlaywright } from "@open-test-pilot/generator";
@@ -299,6 +299,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
   const [connection, setConnection] = useState<"demo" | "live" | "error">(
     api === undefined ? "demo" : "live",
   );
+  const [testSearchSignal, setTestSearchSignal] = useState(0);
   const nav: Array<[string, string]> = [
     ["Overview", "grid"],
     ["Tests", "layers"],
@@ -400,6 +401,20 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
     }
     setTimeout(() => setRunning(false), 1800);
   };
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  const startRunRef = useRef(startRun);
+  startRunRef.current = startRun;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (!runningRef.current) startRunRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
   const cancelRun = (runId: string) => {
     if (api === undefined) return;
     void api
@@ -558,7 +573,14 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             </span>
           </div>
           <div className="top-actions">
-            <button className="icon-button" aria-label={t("topbar.search")}>
+            <button
+              className="icon-button"
+              aria-label={t("topbar.search")}
+              onClick={() => {
+                setActive("Tests");
+                setTestSearchSignal((value) => value + 1);
+              }}
+            >
               <Icon name="search" />
             </button>
             <button className="icon-button" aria-label={t("topbar.notifications")}>
@@ -793,6 +815,7 @@ function App({ sessionToken, login, organizationId, organizationName, serverBase
             tests={tests}
             onRun={startRun}
             live={api !== undefined}
+            searchSignal={testSearchSignal}
             editingTest={editingTest}
             manifestText={manifestText}
             manifestBaseline={manifestBaseline}
@@ -1170,6 +1193,7 @@ function TestsView({
   tests,
   onRun,
   live,
+  searchSignal,
   editingTest,
   manifestText,
   manifestBaseline,
@@ -1183,6 +1207,7 @@ function TestsView({
   tests: ApiTest[];
   onRun: (test: ApiTest) => void;
   live: boolean;
+  searchSignal: number;
   editingTest: ApiTest | undefined;
   manifestText: string;
   manifestBaseline: string;
@@ -1194,6 +1219,20 @@ function TestsView({
   onSave: () => void;
 }) {
   const { t, locale } = useLocale();
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchSignal > 0) searchRef.current?.focus();
+  }, [searchSignal]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleTests =
+    normalizedQuery === ""
+      ? tests
+      : tests.filter((test) =>
+          [test.name, test.manifestId, test.id].some((value) =>
+            value.toLowerCase().includes(normalizedQuery),
+          ),
+        );
   const [view, setView] = useState<
     | "natural"
     | "tree"
@@ -1245,6 +1284,14 @@ function TestsView({
   const customCode = Array.isArray(parsed?.["customCode"])
     ? parsed["customCode"]
     : [];
+  const manifestSteps = Array.isArray(parsed?.["steps"])
+    ? (parsed["steps"] as Array<Record<string, unknown>>)
+    : [];
+  const manifestActionCount = manifestSteps.reduce(
+    (total, step) => total + (Array.isArray(step["actions"]) ? step["actions"].length : 0),
+    0,
+  );
+  const yamlHealthy = parsed !== undefined && typeof parsed === "object" && (parsed as unknown) !== null;
   return (
     <div className="tests-layout">
       <section className="panel live-list">
@@ -1258,6 +1305,16 @@ function TestsView({
             </p>
           </div>
         </div>
+        <div className="test-search">
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("tests.searchPlaceholder")}
+            aria-label={t("tests.searchPlaceholder")}
+          />
+        </div>
         {tests.length === 0 ? (
           <div className="empty-state compact">
             <div className="empty-icon">
@@ -1265,9 +1322,11 @@ function TestsView({
             </div>
             <p>{t("tests.noTests")}</p>
           </div>
+        ) : visibleTests.length === 0 ? (
+          <p className="filter-empty">{t("tests.noMatches", { query: query.trim() })}</p>
         ) : (
           <div className="live-list-body">
-            {tests.map((test) => (
+            {visibleTests.map((test) => (
               <div className="live-list-row" key={test.id}>
                 <div>
                   <b>{test.name}</b>
@@ -1330,6 +1389,11 @@ function TestsView({
                 {t(`tests.tab.${item}`)}
               </button>
             ))}
+          </div>
+          <div className={`manifest-health ${yamlHealthy ? "ok" : "bad"}`} role="status">
+            {yamlHealthy
+              ? t("tests.health.ok", { steps: manifestSteps.length, actions: manifestActionCount })
+              : t("tests.health.invalid")}
           </div>
           {view === "natural" ? (
             <label className="editor-form-field">
@@ -1579,6 +1643,13 @@ function RunsView({
   onCancel: (runId: string) => void;
 }) {
   const { t } = useLocale();
+  const [statusFilter, setStatusFilter] = useState<"all" | Status>("all");
+  const statusCounts = runs.reduce<Record<Status, number>>(
+    (counts, run) => ({ ...counts, [run.status]: counts[run.status] + 1 }),
+    { passed: 0, failed: 0, running: 0, cancelled: 0 },
+  );
+  const visibleRuns =
+    statusFilter === "all" ? runs : runs.filter((run) => run.status === statusFilter);
   const [evidence, setEvidence] = useState<{
     failures: Array<Record<string, unknown>>;
     artifacts: Array<{ id: string; key: string; size: number }>;
@@ -1652,6 +1723,19 @@ function RunsView({
             <p>{t("runs.subtitle")}</p>
           </div>
         </div>
+        <div className="filter-chips" role="group" aria-label={t("runs.filterAria")}>
+          {(["all", "passed", "failed", "running", "cancelled"] as const).map((value) => (
+            <button
+              key={value}
+              className={`filter-chip ${statusFilter === value ? "selected" : ""}`}
+              aria-pressed={statusFilter === value}
+              onClick={() => setStatusFilter(value)}
+            >
+              {t(`runs.filter.${value}`)}
+              <em>{value === "all" ? runs.length : statusCounts[value]}</em>
+            </button>
+          ))}
+        </div>
         <div className="run-table">
           <div className="table-head">
             <span>{t("table.test")}</span>
@@ -1660,7 +1744,10 @@ function RunsView({
             <span>{t("table.status")}</span>
             <span>{t("table.when")}</span>
           </div>
-          {runs.map((run) => (
+          {visibleRuns.length === 0 && (
+            <p className="filter-empty">{t("runs.noMatches")}</p>
+          )}
+          {visibleRuns.map((run) => (
             <button
               className={`run-row ${selectedRun?.id === run.id ? "selected" : ""}`}
               key={run.id}
@@ -1690,20 +1777,14 @@ function RunsView({
             </button>
           ))}
         </div>
-        {selectedRun !== undefined &&
-          (selectedRun.status === "running" ||
-          selectedRun.status === "cancelled" ||
-          selectedRun.status === "failed"
-            ? false
-            : true) &&
-          selectedRun.status !== "passed" && (
-            <button
-              className="text-button"
-              onClick={() => onCancel(selectedRun.id)}
-            >
-              {t("runs.cancelSelected")}
-            </button>
-          )}
+        {selectedRun !== undefined && selectedRun.status === "running" && (
+          <button
+            className="text-button cancel-run-button"
+            onClick={() => onCancel(selectedRun.id)}
+          >
+            {t("runs.cancelSelected")}
+          </button>
+        )}
       </section>
       <section className="panel live-list">
         <div className="panel-header">

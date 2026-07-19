@@ -63,6 +63,39 @@ test('keyboard focus is visually obvious on the primary action', async ({ page }
   expect(outline.width).toBeGreaterThanOrEqual(2);
 });
 
+test('runs can be narrowed with status filter chips', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('.sidebar .nav-item').filter({ hasText: '実行履歴' }).click();
+
+  await expect(page.locator('.run-table .run-row')).toHaveCount(4);
+
+  await page.locator('.filter-chip').filter({ hasText: '失敗' }).click();
+  await expect(page.locator('.run-table .run-row')).toHaveCount(1);
+  await expect(page.locator('.run-table .run-row')).toContainText('Account / sign in');
+
+  await page.locator('.filter-chip').filter({ hasText: 'キャンセル' }).click();
+  await expect(page.locator('.run-table .run-row')).toHaveCount(0);
+  await expect(page.locator('.filter-empty')).toBeVisible();
+
+  await page.locator('.filter-chip').filter({ hasText: 'すべて' }).click();
+  await expect(page.locator('.run-table .run-row')).toHaveCount(4);
+});
+
+test('topbar search opens the tests view and focuses the search field', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '検索' }).click();
+
+  await expect(page.locator('.test-search input')).toBeVisible();
+  await expect(page.locator('.test-search input')).toBeFocused();
+});
+
+test('the advertised keyboard shortcut starts a run', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.run-button')).toBeEnabled();
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('.run-button')).toBeDisabled();
+});
+
 test('settings forms use readable themed controls without oversized panels', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 1024 });
   await page.goto('/');

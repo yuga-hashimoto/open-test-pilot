@@ -311,6 +311,17 @@ const en: Dictionary = {
   "locale.switchToEnglish": "Switch to English",
   "locale.switchToJapanese": "日本語に切り替え",
   "settings.provider.builtin": "built-in",
+  "tests.searchPlaceholder": "Search tests by name or ID",
+  "tests.noMatches": "No tests match “{query}”.",
+  "tests.health.ok": "YAML valid · {steps} steps · {actions} actions",
+  "tests.health.invalid": "YAML is invalid — fix the syntax to enable save and code generation",
+  "runs.filterAria": "Filter runs by status",
+  "runs.filter.all": "All",
+  "runs.filter.passed": "Passed",
+  "runs.filter.failed": "Failed",
+  "runs.filter.running": "Running",
+  "runs.filter.cancelled": "Cancelled",
+  "runs.noMatches": "No runs match this status filter.",
 };
 
 const ja: Dictionary = {
@@ -597,9 +608,20 @@ const ja: Dictionary = {
   "locale.switchToEnglish": "Switch to English",
   "locale.switchToJapanese": "日本語に切り替え",
   "settings.provider.builtin": "組み込み",
+  "tests.searchPlaceholder": "テスト名またはIDで検索",
+  "tests.noMatches": "「{query}」に一致するテストはありません。",
+  "tests.health.ok": "YAML正常 · Step {steps}件 · Action {actions}件",
+  "tests.health.invalid": "YAMLが不正です — 保存とコード生成には構文の修正が必要です",
+  "runs.filterAria": "ステータスで実行を絞り込み",
+  "runs.filter.all": "すべて",
+  "runs.filter.passed": "成功",
+  "runs.filter.failed": "失敗",
+  "runs.filter.running": "実行中",
+  "runs.filter.cancelled": "キャンセル",
+  "runs.noMatches": "このステータスに一致する実行はありません。",
 };
 
-const dictionaries: Record<Locale, Dictionary> = { en, ja };
+export const dictionaries: Record<Locale, Dictionary> = { en, ja };
 
 function interpolate(template: string, params: Record<string, string | number> | undefined): string {
   if (params === undefined) return template;

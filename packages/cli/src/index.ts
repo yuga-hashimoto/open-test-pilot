@@ -31,12 +31,14 @@ Commands:
   testpilot report <report.json>                   Render an HTML report
 
 Global options:
+  --json                                           Emit machine-readable JSON (validate, generate, run)
   --help, -h                                       Show this help
   --version, -v                                    Show the CLI version`;
 
-const RUN_HELP = `Usage: testpilot run <manifest> [--actions <module>]
+const RUN_HELP = `Usage: testpilot run <manifest> [--actions <module>] [--json]
 
-Executes a validated Manifest with the local runner and writes a report.`;
+Executes a validated Manifest with the local runner and writes a report.
+With --json, prints a single JSON object with runId, status, and report paths.`;
 
 function writeHelp(args: string[], output: string[]): number | undefined {
   const first = args[0];
@@ -150,7 +152,9 @@ async function exportManifestProject(input: string, outputPath: string): Promise
   }
 }
 
-export async function runCli(args: string[], output: string[] = []): Promise<number> {
+export async function runCli(rawArgs: string[], output: string[] = []): Promise<number> {
+  const json = rawArgs.includes('--json');
+  const args = rawArgs.filter((arg) => arg !== '--json');
   const helpResult = writeHelp(args, output);
   if (helpResult !== undefined) return helpResult;
   const [group, command, input, ...rest] = args;
@@ -158,11 +162,15 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     const source = await readFile(input, 'utf8');
     const parsed = parseManifest(source, input);
     if (parsed.diagnostics.length > 0) {
+      if (json) {
+        output.push(JSON.stringify({ command: `manifest.${command}`, ok: false, file: input, diagnostics: parsed.diagnostics }));
+        return 1;
+      }
       parsed.diagnostics.forEach((diagnostic) => output.push(`${diagnostic.severity}: ${diagnostic.code} ${diagnostic.path} ${diagnostic.message}`));
       return 1;
     }
     if (command === 'validate') {
-      output.push(`valid: ${input}`);
+      output.push(json ? JSON.stringify({ command: 'manifest.validate', ok: true, file: input, diagnostics: [] }) : `valid: ${input}`);
       return 0;
     }
     const isMobile = [...parsed.manifest.setup, ...parsed.manifest.steps, ...parsed.manifest.cleanup].some((step) => step.actions.some((action) => action.type.startsWith('mobile.')));
@@ -173,7 +181,9 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     await mkdir(dirname(generatedPath), { recursive: true });
     await writeFile(generatedPath, generated.code, 'utf8');
     await writeFile(`${generatedPath}.map.json`, JSON.stringify(generated.sourceMap, null, 2), 'utf8');
-    output.push(`generated: ${generatedPath}`);
+    output.push(json
+      ? JSON.stringify({ command: 'manifest.generate', ok: true, file: input, diagnostics: [], generatedPath, sourceMapPath: `${generatedPath}.map.json` })
+      : `generated: ${generatedPath}`);
     return 0;
   }
 
@@ -276,6 +286,10 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     const source = await readFile(command, 'utf8');
     const parsed = parseManifest(source, command);
     if (parsed.diagnostics.length > 0) {
+      if (json) {
+        output.push(JSON.stringify({ command: 'run', ok: false, file: command, diagnostics: parsed.diagnostics }));
+        return 1;
+      }
       parsed.diagnostics.forEach((diagnostic) => output.push(`${diagnostic.severity}: ${diagnostic.code} ${diagnostic.path} ${diagnostic.message}`));
       return 1;
     }
@@ -292,8 +306,13 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
       ...(customActions === undefined ? {} : { customActions }),
       ...(actionPath === undefined ? {} : { customActionModule: resolve(actionPath) }),
     });
-    output.push(`run: ${result.runId}`);
-    output.push(`report: ${result.htmlReportPath}`);
+    if (json) {
+      const failures = result.steps.flatMap((step) => step.actions.filter((action) => action.status === 'failed').map((action) => ({ stepId: step.stepId, actionId: action.actionId, type: action.type, ...(action.error === undefined ? {} : { error: action.error }) })));
+      output.push(JSON.stringify({ command: 'run', ok: result.status === 'passed', file: command, runId: result.runId, status: result.status, reportPath: result.reportPath, htmlReportPath: result.htmlReportPath, failures }));
+    } else {
+      output.push(`run: ${result.runId}`);
+      output.push(`report: ${result.htmlReportPath}`);
+    }
     return result.status === 'passed' ? 0 : 1;
   }
 
