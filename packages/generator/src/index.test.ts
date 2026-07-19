@@ -137,6 +137,16 @@ describe('generatePlaywright', () => {
     expect(output.code).toContain('customActions[type]');
   });
 
+  it('generates API query/path, header, and JSON Schema assertions', () => {
+    const output = generatePlaywright({
+      ...manifest,
+      steps: [{ id: 'api', actions: [{ id: 'request', type: 'api.request', method: 'GET', url: 'https://api.example.test/users/{id}', pathParams: { id: '1' }, query: { page: 2 }, assertHeaders: { 'x-request-id': 'abc' }, responseSchema: { type: 'object', required: ['id'] } }] }],
+    } as Manifest);
+    expect(output.code).toContain('buildApiUrl(');
+    expect(output.code).toContain('x-request-id');
+    expect(output.code).toContain('assertJsonSchema(body_request');
+  });
+
   it('passes call arguments into a scoped function and resolves manifest variables from vars', () => {
     const output = generatePlaywright({
       ...manifest,

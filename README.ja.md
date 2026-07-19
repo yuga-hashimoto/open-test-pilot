@@ -167,13 +167,30 @@ flowchart LR
 | 対象 | 実行経路 | 注意点 |
 | --- | --- | --- |
 | Chromium、Firefox、WebKit | Playwright Adapter | クイックスタートはChromiumを使用します。他のPlaywrightブラウザは必要に応じてインストールします。 |
-| HTTP API | ManifestのAPI ActionとAPI Adapter | 一つのフロー内でブラウザ操作と組み合わせられます。 |
+| HTTP API | 共通HTTPコア、Fetch API-only Runner、Playwright混在Transport | Status/Header/JSON Path/JSON Schema検証、抽出、Secret除去済みHTTP証跡、OpenAPI 3.x・Postman v2.1取込。負荷・性能テストは別機能です。 |
 | Android | Appium + UiAutomator2 | Appium Serverと、設定済みのエミュレーターまたは実機が必要です。 |
 | iOS | Appium + XCUITest / WebDriverAgent | macOS・Xcodeと、設定済みのSimulatorまたは実機が必要です。 |
 | ローカルリポジトリ | CLI + Local Runner | 個人利用やCIで最も早く始められる経路です。 |
 | チーム | API + Web + Distributed Runner | 運用者が永続化、キュー、ストレージ、認証情報を用意します。 |
 
 モバイルのセットアップは[AndroidとAppium](docs/ANDROID_APPIUM.md)および[iOSとAppium](docs/IOS_APPIUM.md)を参照してください。
+
+### APIテスト
+
+APIだけのManifestはブラウザを起動せずに実行できます。
+
+```bash
+pnpm testpilot run examples/manifests/api-complete.yaml
+```
+
+仕様書からレビュー可能なManifestを生成できます。
+
+```bash
+pnpm testpilot import openapi examples/fixtures/api/openapi.yaml --output /tmp/api.yaml
+pnpm testpilot import postman examples/fixtures/api/postman.collection.json --output /tmp/postman.yaml
+```
+
+`source analyze --framework openapi|postman` はヒューリスティックな候補検出です。`import` コマンドはOpenAPI 3.x/Postman v2.1を構造的に変換し、解決できない外部参照は拒否します。機能テストと契約テストに対応し、負荷・ストレス・ソーク・VUテストはManifest Runnerの対象外です。
 
 ## 現在のプロジェクト状況
 

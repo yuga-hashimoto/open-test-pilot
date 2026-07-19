@@ -167,13 +167,30 @@ The control plane owns metadata, scheduling, tenancy, artifact references, GitHu
 | Surface | Execution path | Notes |
 | --- | --- | --- |
 | Chromium, Firefox, WebKit | Playwright adapter | Chromium is used by the quick start; install other Playwright browsers when needed. |
-| HTTP APIs | Manifest API actions and API adapter | Can be combined with browser actions in one flow. |
+| HTTP APIs | Shared HTTP core, Fetch API-only runner, Playwright mixed-flow transport | Status/header/JSON-path/JSON-Schema assertions, extraction, redacted HTTP evidence, OpenAPI 3.x and Postman v2.1 import. Load/performance testing is intentionally separate. |
 | Android | Appium + UiAutomator2 | Requires an Appium server plus a configured emulator or physical device. |
 | iOS | Appium + XCUITest/WebDriverAgent | Requires macOS/Xcode plus a configured simulator or physical device. |
 | Local repositories | CLI + local runner | Fastest path for individual use and CI. |
 | Teams | API + web + distributed runners | Requires operator-managed persistence, queue, storage, and credentials. |
 
 Mobile setup is documented separately in [Android with Appium](docs/ANDROID_APPIUM.md) and [iOS with Appium](docs/IOS_APPIUM.md).
+
+### API testing
+
+Run an API-only Manifest without launching a browser:
+
+```bash
+pnpm testpilot run examples/manifests/api-complete.yaml
+```
+
+Import a specification into a reviewable Manifest draft:
+
+```bash
+pnpm testpilot import openapi examples/fixtures/api/openapi.yaml --output /tmp/api.yaml
+pnpm testpilot import postman examples/fixtures/api/postman.collection.json --output /tmp/postman.yaml
+```
+
+`source analyze --framework openapi|postman` remains heuristic discovery. The `import` commands perform structured OpenAPI 3.x/Postman v2.1 conversion and reject unresolved remote references. Functional and contract checks are supported; load, stress, soak, and VU testing are not part of the Manifest runner.
 
 ## Current project status
 

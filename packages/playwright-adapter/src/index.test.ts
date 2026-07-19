@@ -213,13 +213,14 @@ describe('executeManifest', () => {
         ...manifest,
         id: 'provider-secret',
         secrets: [{ name: 'TEST_API_TOKEN', provider: 'vault', reference: 'secret/data/test-api' }],
-        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TEST_API_TOKEN}' }, expectedStatus: 200, jsonAssertions: { ok: true } }] }],
+        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TEST_API_TOKEN}' }, expectedStatus: 200, jsonAssertions: { ok: true }, capture: 'always' }] }],
       }, {
         outputDir: '.testpilot/provider-secret',
         secretProviders: { vault: { async get(reference) { expect(reference).toBe('secret/data/test-api'); return 'provider-token'; } } },
       });
       expect(result.status).toBe('passed');
       expect(receivedAuthorization).toBe('Bearer provider-token');
+      expect(JSON.stringify(result)).not.toContain('provider-token');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
     }
