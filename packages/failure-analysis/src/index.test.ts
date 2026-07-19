@@ -9,6 +9,7 @@ describe('failure analysis', () => {
   it('classifies wait-condition and test-data failures', () => {
     expect(classifyFailure('Timeout 30000ms exceeded')).toBe('WAIT_CONDITION_ERROR');
     expect(classifyFailure('test data seed failed: fixture user is missing')).toBe('TEST_DATA_ERROR');
+    expect(classifyFailure('API response schema assertion failed: /id must be integer')).toBe('SPECIFICATION_MISMATCH');
   });
   it('does not hide suspected product defects behind test repairs', () => {
     const decision = decideRepair({ message: 'expect text failed', artifacts: ['screenshot'], attempt: 0 }, { maxAttempts: 3, forbidAppCodeChanges: true });

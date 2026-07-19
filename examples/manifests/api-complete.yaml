@@ -1,0 +1,64 @@
+schemaVersion: "1.0.0"
+id: api-complete
+name: Complete API fixture checks
+description: Functional and contract checks without browser startup.
+type: api
+tags: [api, contract, smoke]
+priority: high
+preconditions: []
+variables: []
+secrets: []
+setup: []
+steps:
+  - id: health
+    description: Check the fixture API health contract
+    actions:
+      - id: health-request
+        type: api.request
+        method: GET
+        url: http://127.0.0.1:4174/health
+        allowedHosts: [127.0.0.1]
+        expectedStatus: 200
+        assertHeaders:
+          x-fixture: api
+        responseSchema:
+          type: object
+          required: [ok, service]
+          properties:
+            ok: { type: boolean }
+            service: { type: string }
+        capture: always
+  - id: create-user
+    description: Validate JSON request and response contract
+    actions:
+      - id: create-user-request
+        type: api.request
+        method: POST
+        url: http://127.0.0.1:4174/users
+        allowedHosts: [127.0.0.1]
+        contentType: application/json
+        body:
+          email: test@example.com
+        expectedStatus: 201
+        responseSchema:
+          type: object
+          required: [id, email]
+          properties:
+            id: { type: integer }
+            email: { type: string }
+        outputs:
+          userId: $.id
+        capture: always
+cleanup: []
+artifacts:
+  screenshots: none
+  traces: false
+runner:
+  minBrowsers: []
+permissions:
+  networkAccess: true
+source:
+  repository: local
+  path: examples/manifests/api-complete.yaml
+generatedCode:
+  path: generated/api-complete.spec.ts

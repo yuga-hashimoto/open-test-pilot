@@ -12,6 +12,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@open-test-pilot/api-adapter": "workspace:*",
     "@open-test-pilot/manifest-schema": "workspace:*",
     "@open-test-pilot/result-schema": "workspace:*",
     "playwright": "^1.55.0"

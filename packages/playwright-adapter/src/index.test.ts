@@ -34,6 +34,35 @@ const manifest: Manifest = {
 };
 
 describe('executeManifest', () => {
+  it('runs an API-only manifest without launching a browser', async () => {
+    const previousExecutable = process.env['PLAYWRIGHT_EXECUTABLE_PATH'];
+    process.env['PLAYWRIGHT_EXECUTABLE_PATH'] = '/definitely/missing-browser';
+    try {
+      const result = await executeManifest({
+        ...manifest,
+        id: 'api-only',
+        type: 'api',
+        steps: [{ id: 'api', actions: [{ id: 'health', type: 'api.request', method: 'GET', url: 'http://127.0.0.1:1/health', allowedHosts: ['127.0.0.1'], expectedStatus: 200 }] }],
+      }, { outputDir: '.testpilot/api-only', screenshotMode: 'none', apiTransport: { async request() { return { status: 200, headers: { 'content-type': 'application/json' }, body: { ok: true }, durationMs: 1 }; } } });
+      expect(result.status).toBe('passed');
+      expect(result.metadata.browser).toBe('none');
+    } finally {
+      if (previousExecutable === undefined) delete process.env['PLAYWRIGHT_EXECUTABLE_PATH'];
+      else process.env['PLAYWRIGHT_EXECUTABLE_PATH'] = previousExecutable;
+    }
+  });
+
+  it('classifies API response schema drift as a specification mismatch', async () => {
+    const result = await executeManifest({
+      ...manifest,
+      id: 'api-schema-drift',
+      type: 'api',
+      steps: [{ id: 'api', actions: [{ id: 'health', type: 'api.request', method: 'GET', url: 'https://api.example.test/health', responseSchema: { type: 'object', required: ['ok'] } }] }],
+    }, { outputDir: '.testpilot/api-schema-drift', screenshotMode: 'none', apiTransport: { async request() { return { status: 200, headers: { 'content-type': 'application/json' }, body: { error: true }, durationMs: 1 }; } } });
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]?.actions[0]?.error?.category).toBe('SPECIFICATION_MISMATCH');
+  });
+
   it('returns a structured failed result when the target is unavailable', async () => {
     const result = await executeManifest(manifest, { outputDir: '.testpilot/test-adapter' });
     expect(result.status).toBe('failed');
@@ -195,13 +224,14 @@ describe('executeManifest', () => {
         ...manifest,
         id: 'provider-secret',
         secrets: [{ name: 'TEST_API_TOKEN', provider: 'vault', reference: 'secret/data/test-api' }],
-        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TEST_API_TOKEN}' }, expectedStatus: 200, jsonAssertions: { ok: true } }] }],
+        steps: [{ id: 'secret-request', actions: [{ id: 'request', type: 'api.request', url: `http://127.0.0.1:${address.port}/secret`, headers: { authorization: 'Bearer ${secret:TEST_API_TOKEN}' }, expectedStatus: 200, jsonAssertions: { ok: true }, capture: 'always' }] }],
       }, {
         outputDir: '.testpilot/provider-secret',
         secretProviders: { vault: { async get(reference) { expect(reference).toBe('secret/data/test-api'); return 'provider-token'; } } },
       });
       expect(result.status).toBe('passed');
       expect(receivedAuthorization).toBe('Bearer provider-token');
+      expect(JSON.stringify(result)).not.toContain('provider-token');
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
     }

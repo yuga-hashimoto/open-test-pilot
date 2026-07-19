@@ -14,6 +14,7 @@ export interface RepairDecision { allowed: boolean; reason: string; category: Fa
 export function classifyFailure(message: string): FailureCategory {
   if (/ERR_CONNECTION_REFUSED|ECONNREFUSED|browserType\.launch|executable doesn't exist/i.test(message)) return 'ENVIRONMENT_ERROR';
   if (/net::|fetch|ECONNRESET|ENOTFOUND/i.test(message)) return 'NETWORK_ERROR';
+  if (/API (?:response )?schema assertion|contract assertion|specification mismatch/i.test(message)) return 'SPECIFICATION_MISMATCH';
   if (/locator|waiting for|to be visible|to have text/i.test(message)) return 'LOCATOR_CHANGED';
   if (/timeout|timed out|waitUntil/i.test(message)) return 'WAIT_CONDITION_ERROR';
   if (/test.?data|fixture|seed/i.test(message)) return 'TEST_DATA_ERROR';

@@ -32,6 +32,17 @@ generatedCode:
 `;
 
 describe('testpilot CLI', () => {
+  it('imports OpenAPI and writes a schema-valid Manifest', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'testpilot-import-'));
+    const input = join(directory, 'openapi.yaml');
+    const output = join(directory, 'imported.yaml');
+    await writeFile(input, 'openapi: "3.0.0"\ninfo:\n  title: Demo\npaths:\n  /health:\n    get:\n      responses:\n        "200": {}\n', 'utf8');
+    const messages: string[] = [];
+    expect(await runCli(['import', 'openapi', input, '--output', output], messages)).toBe(0);
+    expect(messages).toEqual([`imported: ${input}`, 'operations: 1', `manifest: ${output}`]);
+    expect((await import('@open-test-pilot/manifest-parser')).parseManifest(await readFile(output, 'utf8'), output).diagnostics).toEqual([]);
+  });
+
   it('provides actionable help and version output without treating flags as files', async () => {
     const help: string[] = [];
     expect(await runCli(['--help'], help)).toBe(0);

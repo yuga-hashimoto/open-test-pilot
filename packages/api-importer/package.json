@@ -1,5 +1,5 @@
 {
-  "name": "@open-test-pilot/api-adapter",
+  "name": "@open-test-pilot/api-importer",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,7 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "lint": "tsc --noEmit --pretty false", "typecheck": "tsc --build", "test": "vitest run", "build": "tsc --build" },
   "dependencies": {
-    "ajv": "^8.17.0"
+    "@open-test-pilot/manifest-schema": "workspace:*",
+    "yaml": "^2.8.1"
   }
 }

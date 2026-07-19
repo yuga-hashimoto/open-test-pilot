@@ -114,6 +114,10 @@ function anyExpression(value: unknown, manifest: Manifest): string {
   return `resolveAny(${JSON.stringify(value)})`;
 }
 
+function apiUrlExpression(action: ManifestAction, manifest: Manifest): string {
+  return `buildApiUrl(${valueExpression(action.url ?? '', manifest)}, ${anyExpression(action.pathParams ?? {}, manifest)}, ${anyExpression(action.query ?? {}, manifest)})`;
+}
+
 function locatorExpression(selector: string, target?: ManifestAction['target']): string {
   if (target?.role !== undefined) return `page.getByRole(${quote(target.role)}, ${target.name === undefined ? '{}' : `{ name: ${quote(target.name)} }`})`;
   if (target?.label !== undefined) return `page.getByLabel(${quote(target.label)})`;
@@ -156,9 +160,11 @@ function actionLines(action: ManifestAction, manifest: Manifest, indent: string)
         const identifier = action.id.replace(/[^A-Za-z0-9_$]/g, '_');
         const expectedStatuses = Array.isArray(action.expectedStatus) ? action.expectedStatus : [action.expectedStatus ?? 200];
         return [
-          `${indent}const response_${identifier} = await request.fetch(${valueExpression(action.url ?? '', manifest)}, { method: ${quote(action.method ?? 'GET')}, headers: ${anyExpression(action.headers ?? {}, manifest)} as Record<string, string>, data: ${anyExpression(action.body, manifest)} });`,
+          `${indent}const response_${identifier} = await request.fetch(${apiUrlExpression(action, manifest)}, { method: ${quote(action.method ?? 'GET')}, headers: ${anyExpression(action.headers ?? {}, manifest)} as Record<string, string>, data: ${anyExpression(action.body, manifest)}${action.timeoutMs === undefined ? '' : `, timeout: ${action.timeoutMs}`}${action.contentType === undefined ? '' : `, headers: { ...(${anyExpression(action.headers ?? {}, manifest)} as Record<string, string>), 'content-type': ${quote(action.contentType)} }`} });`,
           `${indent}expect([${expectedStatuses.join(', ')}]).toContain(response_${identifier}.status());`,
           `${indent}const body_${identifier} = await response_${identifier}.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });`,
+          ...Object.entries(action.assertHeaders ?? {}).map(([header, expected]) => `${indent}expect(response_${identifier}.headers()[${quote(header)}]?.toLowerCase()).toBe(${quote(expected.toLowerCase())});`),
+          ...(action.responseSchema === undefined ? [] : [`${indent}assertJsonSchema(body_${identifier}, ${JSON.stringify(action.responseSchema)});`]),
           ...Object.entries(action.jsonAssertions ?? {}).map(([path, expected]) => `${indent}expect(readPath(body_${identifier}, ${quote(path)})).toEqual(${JSON.stringify(expected)});`),
           ...(action.outputs === undefined ? [] : [`${indent}stepOutputs[${quote(action.id)}] = { response: { status: response_${identifier}.status(), body: body_${identifier} }, ...Object.fromEntries(Object.entries(${JSON.stringify(action.outputs)}).map(([key, path]) => [key, readPath(body_${identifier}, path as string)])) };`]),
         ];
@@ -348,6 +354,8 @@ export function generatePlaywright(manifest: Manifest, options: GeneratePlaywrig
     '  return expression.split(/\\s*\\|\\|\\s*/).some((orPart) => orPart.split(/\\s*&&\\s*/).every(evaluateAtom));',
     '};',
     'const asArray = (value: unknown): unknown[] => { if (Array.isArray(value)) return value; if (typeof value !== "string") return []; try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; } };',
+    'const buildApiUrl = (raw: string, pathParams: Record<string, unknown>, query: Record<string, unknown>): string => { let url = raw; for (const [key, value] of Object.entries(pathParams)) url = url.replaceAll(`{${key}}`, encodeURIComponent(String(value))); const parsed = new URL(url); for (const [key, value] of Object.entries(query)) if (value !== null && value !== undefined) parsed.searchParams.set(key, String(value)); return parsed.toString(); };',
+    'const assertJsonSchema = (value: unknown, schema: any, path = "$" ): void => { if (schema?.type === "object" && (value === null || typeof value !== "object" || Array.isArray(value))) throw new Error(`API response schema assertion failed at ${path}: expected object`); if (schema?.type === "array" && !Array.isArray(value)) throw new Error(`API response schema assertion failed at ${path}: expected array`); if (schema?.type === "string" && typeof value !== "string") throw new Error(`API response schema assertion failed at ${path}: expected string`); if ((schema?.type === "integer" || schema?.type === "number") && (typeof value !== "number" || (schema.type === "integer" && !Number.isInteger(value)))) throw new Error(`API response schema assertion failed at ${path}: expected number`); if (schema?.required && value && typeof value === "object") for (const key of schema.required) if (!(key in (value as Record<string, unknown>))) throw new Error(`API response schema assertion failed at ${path}.${key}: required`); if (schema?.properties && value && typeof value === "object") for (const [key, child] of Object.entries(schema.properties)) if (key in (value as Record<string, unknown>)) assertJsonSchema((value as Record<string, unknown>)[key], child, `${path}.${key}`); if (schema?.items && Array.isArray(value)) for (const [index, child] of value.entries()) assertJsonSchema(child, schema.items, `${path}.${index}`); if (schema?.enum && !schema.enum.some((candidate: unknown) => Object.is(candidate, value))) throw new Error(`API response schema assertion failed at ${path}: enum`); };',
     '',
     `test(${quote(manifest.name)}, async ({ page, request }) => {`,
   ];

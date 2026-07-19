@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { generateMobileAppium, generatePlaywright } from '@open-test-pilot/generator';
+import { importOpenApi, importPostmanCollection, type ApiImportOptions } from '@open-test-pilot/api-importer';
 import { runLocal } from '@open-test-pilot/local-runner';
 import type { CustomActionExecutor } from '@open-test-pilot/playwright-adapter';
 import { diffManifests, migrateManifest, previewMigration } from '@open-test-pilot/manifest-migrator';
@@ -24,6 +25,8 @@ Commands:
   testpilot manifest diff <before> <after>         Compare two Manifests
   testpilot manifest export <file> --output <path> Export a standalone project
   testpilot source analyze <source> [options]      Analyze source into a Manifest
+  testpilot import openapi <file> [options]        Import OpenAPI 3.0/3.1 into a Manifest
+  testpilot import postman <file> [options]        Import Postman Collection v2.1 into a Manifest
   testpilot run <file> [--actions <module>]        Execute a Manifest locally
   testpilot report <report.json>                   Render an HTML report
 
@@ -236,6 +239,35 @@ export async function runCli(args: string[], output: string[] = []): Promise<num
     await writeFile(destination, stringifyYaml(generated.manifest), 'utf8');
     output.push(`analyzed: ${input}`);
     output.push(`findings: ${generated.findings.length}`);
+    output.push(`manifest: ${destination}`);
+    return 0;
+  }
+
+  if (group === 'import' && (command === 'openapi' || command === 'postman') && input !== undefined) {
+    const source = await readFile(input, 'utf8');
+    const flags = new Map<string, string>();
+    for (let index = 0; index < rest.length; index += 1) {
+      const flag = rest[index];
+      const value = rest[index + 1];
+      if (flag?.startsWith('--') && value !== undefined && !value.startsWith('--')) flags.set(flag.slice(2), value);
+    }
+    const importOptions: ApiImportOptions = {};
+    const baseUrl = flags.get('base-url');
+    const id = flags.get('id');
+    const name = flags.get('name');
+    const repository = flags.get('repository');
+    const generatedCodePath = flags.get('generated-code');
+    if (baseUrl !== undefined) importOptions.baseUrl = baseUrl;
+    if (id !== undefined) importOptions.id = id;
+    if (name !== undefined) importOptions.name = name;
+    if (repository !== undefined) importOptions.repository = repository;
+    if (generatedCodePath !== undefined) importOptions.generatedCodePath = generatedCodePath;
+    const imported = command === 'openapi' ? importOpenApi(source, importOptions) : importPostmanCollection(source, importOptions);
+    const destination = flags.get('output') ?? `${input}.manifest.yaml`;
+    await mkdir(dirname(resolve(destination)), { recursive: true });
+    await writeFile(destination, stringifyYaml(imported.manifest), 'utf8');
+    output.push(`imported: ${input}`);
+    output.push(`operations: ${imported.operations.length}`);
     output.push(`manifest: ${destination}`);
     return 0;
   }

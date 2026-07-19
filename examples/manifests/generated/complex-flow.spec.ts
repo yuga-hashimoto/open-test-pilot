@@ -48,6 +48,8 @@ const resolveCondition = (expression: string): boolean => {
   return expression.split(/\s*\|\|\s*/).some((orPart) => orPart.split(/\s*&&\s*/).every(evaluateAtom));
 };
 const asArray = (value: unknown): unknown[] => { if (Array.isArray(value)) return value; if (typeof value !== "string") return []; try { const parsed: unknown = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; } };
+const buildApiUrl = (raw: string, pathParams: Record<string, unknown>, query: Record<string, unknown>): string => { let url = raw; for (const [key, value] of Object.entries(pathParams)) url = url.replaceAll(`{${key}}`, encodeURIComponent(String(value))); const parsed = new URL(url); for (const [key, value] of Object.entries(query)) if (value !== null && value !== undefined) parsed.searchParams.set(key, String(value)); return parsed.toString(); };
+const assertJsonSchema = (value: unknown, schema: any, path = "$" ): void => { if (schema?.type === "object" && (value === null || typeof value !== "object" || Array.isArray(value))) throw new Error(`API response schema assertion failed at ${path}: expected object`); if (schema?.type === "array" && !Array.isArray(value)) throw new Error(`API response schema assertion failed at ${path}: expected array`); if (schema?.type === "string" && typeof value !== "string") throw new Error(`API response schema assertion failed at ${path}: expected string`); if ((schema?.type === "integer" || schema?.type === "number") && (typeof value !== "number" || (schema.type === "integer" && !Number.isInteger(value)))) throw new Error(`API response schema assertion failed at ${path}: expected number`); if (schema?.required && value && typeof value === "object") for (const key of schema.required) if (!(key in (value as Record<string, unknown>))) throw new Error(`API response schema assertion failed at ${path}.${key}: required`); if (schema?.properties && value && typeof value === "object") for (const [key, child] of Object.entries(schema.properties)) if (key in (value as Record<string, unknown>)) assertJsonSchema((value as Record<string, unknown>)[key], child, `${path}.${key}`); if (schema?.items && Array.isArray(value)) for (const [index, child] of value.entries()) assertJsonSchema(child, schema.items, `${path}.${index}`); if (schema?.enum && !schema.enum.some((candidate: unknown) => Object.is(candidate, value))) throw new Error(`API response schema assertion failed at ${path}: enum`); };
 
 test('API and Web complex flow', async ({ page, request }) => {
   const callFunction = async (name: string, args: Record<string, unknown>): Promise<void> => {
@@ -67,7 +69,7 @@ test('API and Web complex flow', async ({ page, request }) => {
   };
   // testpilot:step create-user
   // testpilot:action create-user-request
-  const response_create_user_request = await request.fetch('http://127.0.0.1:4173/api/test-user', { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
+  const response_create_user_request = await request.fetch(buildApiUrl('http://127.0.0.1:4173/api/test-user', resolveAny({}), resolveAny({})), { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
   expect([200]).toContain(response_create_user_request.status());
   const body_create_user_request = await response_create_user_request.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
   expect(readPath(body_create_user_request, 'email')).toEqual("test@example.com");
@@ -94,7 +96,7 @@ test('API and Web complex flow', async ({ page, request }) => {
     await expect(page.locator('#missing')).toBeVisible();
   }
   // testpilot:action list-products
-  const response_list_products = await request.fetch('http://127.0.0.1:4173/api/products', { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
+  const response_list_products = await request.fetch(buildApiUrl('http://127.0.0.1:4173/api/products', resolveAny({}), resolveAny({})), { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
   expect([200]).toContain(response_list_products.status());
   const body_list_products = await response_list_products.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
   stepOutputs['list-products'] = { response: { status: response_list_products.status(), body: body_list_products }, ...Object.fromEntries(Object.entries({"items":"$"}).map(([key, path]) => [key, readPath(body_list_products, path as string)])) };
@@ -110,14 +112,14 @@ test('API and Web complex flow', async ({ page, request }) => {
   await Promise.all([
     (async () => {
       // testpilot:action health
-      const response_health = await request.fetch('http://127.0.0.1:4173/api/health', { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
+      const response_health = await request.fetch(buildApiUrl('http://127.0.0.1:4173/api/health', resolveAny({}), resolveAny({})), { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
       expect([200]).toContain(response_health.status());
       const body_health = await response_health.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
       expect(readPath(body_health, 'ok')).toEqual(true);
     })(),
     (async () => {
       // testpilot:action products-again
-      const response_products_again = await request.fetch('http://127.0.0.1:4173/api/products', { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
+      const response_products_again = await request.fetch(buildApiUrl('http://127.0.0.1:4173/api/products', resolveAny({}), resolveAny({})), { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
       expect([200]).toContain(response_products_again.status());
       const body_products_again = await response_products_again.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
     })(),
@@ -130,7 +132,7 @@ test('API and Web complex flow', async ({ page, request }) => {
     await expect(page.locator('[data-testid=dashboard]')).toBeVisible();
   } finally {
     // testpilot:action delete-user
-    const response_delete_user = await request.fetch('http://127.0.0.1:4173/api/delete-user', { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
+    const response_delete_user = await request.fetch(buildApiUrl('http://127.0.0.1:4173/api/delete-user', resolveAny({}), resolveAny({})), { method: 'GET', headers: resolveAny({}) as Record<string, string>, data: resolveAny(undefined) });
     expect([204]).toContain(response_delete_user.status());
     const body_delete_user = await response_delete_user.text().then((text) => { try { return JSON.parse(text) as unknown; } catch { return text; } });
   }
